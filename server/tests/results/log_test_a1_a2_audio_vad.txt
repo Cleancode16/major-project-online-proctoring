@@ -1,0 +1,7 @@
+A1 video audio: 199680 samples = 12.48 s @16 kHz, RMS -240.0 dBFS, peak 0.000 -> source status: digital_silence
+A1 mic smoke test: 0.90 s captured, RMS -96.7 dBFS -> source status: digital_silence (not saved)
+A1 wav round trip max abs diff 0.00000 (16-bit quantisation)
+A2 [silero] utterances detected 13/13; false speech seconds outside labels (0.3 s tolerance) per scene: {'silence': 0.0, 'candidate_speech': 0.0, 'other_speaker': 0.0, 'dialogue': 0.0, 'music': 0.0, 'phone_ring': 0.0, 'typing': 0.0, 'whisper': 0.0}; informational frame-level precision 1.000 recall 0.876
+A2 [webrtc] utterances detected 13/13; false speech seconds outside labels (0.3 s tolerance) per scene: {'silence': 0.0, 'candidate_speech': 0.0, 'other_speaker': 0.0, 'dialogue': 0.0, 'music': 16.35, 'phone_ring': 6.22, 'typing': 14.99, 'whisper': 0.0}; informational frame-level precision 0.537 recall 0.885
+A2 real clip audio (no labels, informational): speech segments []
+A1: PASS | A2: PASS

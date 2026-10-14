@@ -1,0 +1,113 @@
+{
+  "n_speakers": 26,
+  "calibration_speakers": [
+    "1272",
+    "174",
+    "1993",
+    "2412",
+    "251",
+    "3000",
+    "3576",
+    "5338",
+    "5895",
+    "6295",
+    "777",
+    "7976",
+    "84"
+  ],
+  "heldout_speakers": [
+    "1462",
+    "1988",
+    "2035",
+    "2428",
+    "2803",
+    "3536",
+    "3752",
+    "5694",
+    "6241",
+    "6319",
+    "7850",
+    "8297",
+    "8842"
+  ],
+  "by_chunk": {
+    "1.5": {
+      "raw": {
+        "eer_threshold_cal": 0.7,
+        "heldout_FRR": 0.0074,
+        "heldout_FAR": 0.0216,
+        "heldout_n_target": 544,
+        "heldout_n_nontarget": 13600,
+        "target_mean": 0.839,
+        "nontarget_mean": 0.54
+      },
+      "smoothed": {
+        "eer_threshold_cal": 0.696,
+        "heldout_FRR": 0.0018,
+        "heldout_FAR": 0.0194,
+        "heldout_n_target": 544,
+        "heldout_n_nontarget": 13600,
+        "target_mean": 0.838,
+        "nontarget_mean": 0.539
+      },
+      "speaker_change": {
+        "diff_thr_same1pct": 0.567,
+        "diff_pairs_detected_at_thr": 0.8516,
+        "same_mean": 0.748,
+        "diff_mean": 0.482
+      }
+    },
+    "2.0": {
+      "raw": {
+        "eer_threshold_cal": 0.719,
+        "heldout_FRR": 0.0,
+        "heldout_FAR": 0.0208,
+        "heldout_n_target": 403,
+        "heldout_n_nontarget": 10075,
+        "target_mean": 0.866,
+        "nontarget_mean": 0.554
+      },
+      "smoothed": {
+        "eer_threshold_cal": 0.718,
+        "heldout_FRR": 0.0,
+        "heldout_FAR": 0.0193,
+        "heldout_n_target": 403,
+        "heldout_n_nontarget": 10075,
+        "target_mean": 0.865,
+        "nontarget_mean": 0.553
+      },
+      "speaker_change": {
+        "diff_thr_same1pct": 0.621,
+        "diff_pairs_detected_at_thr": 0.9056,
+        "same_mean": 0.791,
+        "diff_mean": 0.51
+      }
+    },
+    "3.0": {
+      "raw": {
+        "eer_threshold_cal": 0.74,
+        "heldout_FRR": 0.0,
+        "heldout_FAR": 0.0141,
+        "heldout_n_target": 263,
+        "heldout_n_nontarget": 6575,
+        "target_mean": 0.892,
+        "nontarget_mean": 0.563
+      },
+      "smoothed": {
+        "eer_threshold_cal": 0.746,
+        "heldout_FRR": 0.0,
+        "heldout_FAR": 0.0099,
+        "heldout_n_target": 263,
+        "heldout_n_nontarget": 6575,
+        "target_mean": 0.892,
+        "nontarget_mean": 0.563
+      },
+      "speaker_change": {
+        "diff_thr_same1pct": 0.676,
+        "diff_pairs_detected_at_thr": 0.96,
+        "same_mean": 0.833,
+        "diff_mean": 0.526
+      }
+    }
+  }
+}

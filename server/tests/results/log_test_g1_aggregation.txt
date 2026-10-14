@@ -1,0 +1,52 @@
+(1) per-type statistics
+  [ok] objects numerator/denominator: got (4, 30) expected (4, 30)
+  [ok] objects %: got 13.33 expected 13.33
+  [ok] objects duration_s: got 1.33 expected 1.33
+  [ok] objects events: got 1 expected 1
+  [ok] head pose denominator: got 24 expected 24
+  [ok] head pose %: got 12.5 expected 12.5
+  [ok] identity denominator: got 27 expected 27
+  [ok] face not visible %: got 10.0 expected 10.0
+  [ok] speech seconds: got 4.8 expected 4.8
+  [ok] speech %: got 8.0 expected 8.0
+  [ok] suspicious %: got 2.4 expected 2.4
+  [ok] score: got 23.0 expected 23.0
+  [ok] timeline sorted, video+audio: got 2 expected 2
+(2) verdict paths
+   impostor majority      -> INVALID    score  14.5 | Unauthorized person detected (66.7% of samples, longest event 6.7 s)
+  [ok] impostor majority label: got 'INVALID' expected 'INVALID'
+  [ok] impostor majority reason mentions 'Unauthorized': got True expected True
+   phone 4 s at 5%        -> INVALID    score   7.2 | Prohibited object detected (5.0% of samples, longest event 4.0 s)
+  [ok] phone 4 s at 5% label: got 'INVALID' expected 'INVALID'
+  [ok] phone 4 s at 5% reason mentions 'Prohibited': got True expected True
+   second person 1 s, 2%  -> SUSPICIOUS score   2.9 | MULTIPLE_PERSONS: 1 event(s), 1.0 s (critical type, below INVALID limits)
+  [ok] second person 1 s, 2% label: got 'SUSPICIOUS' expected 'SUSPICIOUS'
+  [ok] second person 1 s, 2% reason mentions 'MULTIPLE_PERSONS': got True expected True
+   gaze 40% only          -> SUSPICIOUS score   3.6 | GAZE_AWAY at 40.7% (>= 30%)
+  [ok] gaze 40% only label: got 'SUSPICIOUS' expected 'SUSPICIOUS'
+  [ok] gaze 40% only reason mentions 'GAZE_AWAY': got True expected True
+   clean                  -> VALID      score   0.0 | No violation above its limits
+  [ok] clean label: got 'VALID' expected 'VALID'
+  [ok] clean reason mentions 'No violation': got True expected True
+   clean but muted mic    -> SUSPICIOUS score   0.0 | Audio source digital silence: audio could not be monitored
+  [ok] clean but muted mic label: got 'SUSPICIOUS' expected 'SUSPICIOUS'
+  [ok] clean but muted mic reason mentions 'Audio source': got True expected True
+   voice mismatch 6 s     -> INVALID    score  14.5 | Voice does not match the enrolled candidate (10.4% of seconds, longest event 6.2 s)
+  [ok] voice mismatch 6 s label: got 'INVALID' expected 'INVALID'
+  [ok] voice mismatch 6 s reason mentions 'Voice': got True expected True
+(3) legacy profile verdict on the real clip == v1 output
+  [ok] legacy verdict: got 'EXAM INVALID - Prohibited objects found' expected 'EXAM INVALID - Prohibited objects found'
+  [ok] legacy counts (pose, gaze, persons, objects): got (3, 38, 4, 11) expected (3, 38, 4, 11)
+  [ok] legacy analyzed frames: got 35 expected 35
+(4) saved report from the CLI run (tests/results/G1_sample_report)
+  [ok] key meta: got True expected True
+  [ok] key verdict: got True expected True
+  [ok] key per_violation: got True expected True
+  [ok] key timeline: got True expected True
+  [ok] key video: got True expected True
+  [ok] key audio: got True expected True
+  [ok] key warnings: got True expected True
+  [ok] key thresholds: got True expected True
+  [ok] every video event has an evidence file: got True expected True
+  [ok] audio silent warning present: got True expected True
+G1 AGGREGATION: PASS

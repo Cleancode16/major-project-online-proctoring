@@ -1,0 +1,6 @@
+(a) synthetic grid 75 poses: fixed max abs error = 0.000 deg
+    legacy pitch range on same poses: -180.0 .. 170.8 deg (true pitch range -20..20)
+    frontal face: fixed=(0.0, 0.0, 0.0) legacy=(-0.5, -179.8, -0.0)
+(b) yaw=+25: nose x 640 > eye-mid x 615 (turned to image right) -> True; nose offset below eye/mouth corners: pitch +20 -> 22.2px, 0 -> 3.8px, -20 -> -15.0px (pitch>0 = chin down) -> True
+(c) real frontal frames n=12: fixed pitch 8.8..13.8, fixed yaw -18.3..-10.3; legacy pitch -171.4..-166.2
+V1 HEAD POSE: PASS

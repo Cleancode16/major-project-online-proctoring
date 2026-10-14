@@ -1,37 +1,31 @@
-import { Wifi, WifiOff, CheckCircle, Clock } from 'lucide-react';
+import { Wifi, WifiOff, CheckCircle, Clock, Loader } from 'lucide-react';
 
-const StatusIndicator = ({ connected, calibrated }) => {
+// connectionState: RTCPeerConnection.connectionState ('new' | 'connecting' | 'connected' | 'disconnected' | 'failed' | 'closed')
+const StatusIndicator = ({ connectionState, calibrated, calibrationText }) => {
+  const connected = connectionState === 'connected';
+  const connecting = connectionState === 'connecting' || connectionState === 'new';
+  const ok = 'text-green-700 dark:text-green-400';
+  const wait = 'text-amber-700 dark:text-amber-400';
+  const bad = 'text-red-700 dark:text-red-400';
   return (
-    <div className="flex items-center gap-4">
-      {/* Connection Status */}
+    <div className="flex items-center gap-3 rounded-lg px-3 py-2 surface-muted ring-1 ring-slate-200 dark:ring-slate-800" role="status">
       <div className="flex items-center gap-2">
         {connected ? (
-          <>
-            <Wifi className="w-5 h-5 text-green-600" />
-            <span className="text-sm font-medium text-green-700">Connected</span>
-          </>
+          <><Wifi className={`w-4 h-4 ${ok}`} /><span className={`text-sm font-medium ${ok}`}>Connected</span></>
+        ) : connecting ? (
+          <><Loader className={`w-4 h-4 animate-spin ${wait}`} /><span className={`text-sm font-medium ${wait}`}>Connecting...</span></>
         ) : (
-          <>
-            <WifiOff className="w-5 h-5 text-red-600" />
-            <span className="text-sm font-medium text-red-700">Disconnected</span>
-          </>
+          <><WifiOff className={`w-4 h-4 ${bad}`} /><span className={`text-sm font-medium ${bad}`}>Not connected</span></>
         )}
       </div>
 
-      {/* Calibration Status */}
-      <div className="h-6 w-px bg-gray-300"></div>
-      
+      <div className="h-5 w-px bg-slate-300 dark:bg-slate-700"></div>
+
       <div className="flex items-center gap-2">
         {calibrated ? (
-          <>
-            <CheckCircle className="w-5 h-5 text-green-600" />
-            <span className="text-sm font-medium text-green-700">Calibrated</span>
-          </>
+          <><CheckCircle className={`w-4 h-4 ${ok}`} /><span className={`text-sm font-medium ${ok}`}>Calibrated</span></>
         ) : (
-          <>
-            <Clock className="w-5 h-5 text-yellow-600 animate-pulse" />
-            <span className="text-sm font-medium text-yellow-700">Calibrating...</span>
-          </>
+          <><Clock className={`w-4 h-4 animate-pulse ${wait}`} /><span className={`text-sm font-medium ${wait}`}>{calibrationText || 'Calibrating...'}</span></>
         )}
       </div>
     </div>

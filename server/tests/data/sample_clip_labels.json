@@ -1,0 +1,57 @@
+﻿{
+    "_about":  "Frame-level ground truth for the real sample clip WIN_20260207_13_29_05_Pro.mp4 (377 frames, 29.78 fps), labelled by visual inspection of contact sheets (every 4th frame around transitions). Ranges are inclusive frame indices. \u0027ambiguous\u0027 frames are excluded from scoring.",
+    "frames":  377,
+    "positive":  {
+                     "PROHIBITED_OBJECT":  [
+                                               [
+                                                   252,
+                                                   376
+                                               ]
+                                           ],
+                     "MULTIPLE_PERSONS":  [
+                                              [
+                                                  336,
+                                                  376
+                                              ]
+                                          ],
+                     "HEAD_POSE_DEVIATION":  [
+                                                 [
+                                                     345,
+                                                     365
+                                                 ]
+                                             ]
+                 },
+    "ambiguous":  {
+                      "PROHIBITED_OBJECT":  [
+                                                [
+                                                    244,
+                                                    251
+                                                ]
+                                            ],
+                      "MULTIPLE_PERSONS":  [
+                                               [
+                                                   324,
+                                                   335
+                                               ]
+                                           ],
+                      "HEAD_POSE_DEVIATION":  [
+                                                  [
+                                                      336,
+                                                      344
+                                                  ],
+                                                  [
+                                                      366,
+                                                      376
+                                                  ]
+                                              ]
+                  },
+    "negative_everywhere_else":  [
+                                     "PROHIBITED_OBJECT",
+                                     "MULTIPLE_PERSONS",
+                                     "IDENTITY_MISMATCH",
+                                     "GAZE_AWAY",
+                                     "FACE_NOT_VISIBLE",
+                                     "HEAD_POSE_DEVIATION"
+                                 ],
+    "notes":  "Candidate (enrolled person) is in frame and faces the screen for the whole clip. Phone is raised in front of the chest from frame ~244. A second person leans in from the right edge from frame ~324 (hair), face clearly visible from ~336. HEAD_POSE_DEVIATION: labelled from an independent 2D measurement (angle of the line between eye corners 33-263, no PnP): candidate ~ +1.6..+3.3 deg in frames 100-300, -8.0 at 338, -16.6 at 348, -15.1 at 358, -9.0 at 368 (he tilts his head towards the person leaning in). Positive where the tilt deviates \u003e 10 deg from his baseline (345-365), borderline frames ambiguous. Corrected 2026-10-14 after the first version wrongly marked the whole clip negative."
+}

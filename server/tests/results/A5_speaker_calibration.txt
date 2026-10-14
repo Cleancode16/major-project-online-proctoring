@@ -1,0 +1,30 @@
+﻿Embedding Mini LibriSpeech dev-clean-2 ...
+  speaker 1272: enroll 22.0s (7 chunks, consistency 0.81), test voiced 63.0s
+  speaker 1462: enroll 20.8s (6 chunks, consistency 0.86), test voiced 60.7s
+  speaker 174: enroll 25.0s (7 chunks, consistency 0.84), test voiced 62.1s
+  speaker 1988: enroll 29.2s (8 chunks, consistency 0.87), test voiced 62.4s
+  speaker 1993: enroll 24.2s (7 chunks, consistency 0.89), test voiced 58.1s
+  speaker 2035: enroll 21.8s (6 chunks, consistency 0.84), test voiced 69.1s
+  speaker 2412: enroll 22.2s (7 chunks, consistency 0.83), test voiced 63.6s
+  speaker 2428: enroll 25.9s (8 chunks, consistency 0.87), test voiced 60.0s
+  speaker 251: enroll 28.0s (8 chunks, consistency 0.81), test voiced 64.6s
+  speaker 2803: enroll 27.0s (8 chunks, consistency 0.85), test voiced 69.4s
+  speaker 3000: enroll 24.0s (7 chunks, consistency 0.86), test voiced 60.3s
+  speaker 3536: enroll 35.8s (12 chunks, consistency 0.85), test voiced 66.1s
+  speaker 3576: enroll 24.9s (8 chunks, consistency 0.86), test voiced 62.6s
+  speaker 3752: enroll 22.5s (6 chunks, consistency 0.85), test voiced 65.4s
+  speaker 5338: enroll 24.5s (7 chunks, consistency 0.83), test voiced 64.7s
+  speaker 5694: enroll 21.8s (6 chunks, consistency 0.85), test voiced 61.6s
+  speaker 5895: enroll 22.0s (6 chunks, consistency 0.90), test voiced 63.0s
+  speaker 6241: enroll 20.7s (6 chunks, consistency 0.85), test voiced 60.9s
+  speaker 6295: enroll 20.3s (6 chunks, consistency 0.83), test voiced 65.2s
+  speaker 6319: enroll 24.0s (7 chunks, consistency 0.83), test voiced 64.3s
+  speaker 777: enroll 23.8s (7 chunks, consistency 0.80), test voiced 62.1s
+  speaker 7850: enroll 24.4s (7 chunks, consistency 0.80), test voiced 61.5s
+  speaker 7976: enroll 27.1s (8 chunks, consistency 0.86), test voiced 62.0s
+  speaker 8297: enroll 27.4s (8 chunks, consistency 0.82), test voiced 64.7s
+  speaker 84: enroll 24.7s (8 chunks, consistency 0.85), test voiced 62.9s
+  speaker 8842: enroll 44.1s (12 chunks, consistency 0.85), test voiced 68.7s
+chunk 1.5s: raw thr 0.7 FRR 0.007 FAR 0.022 | median-of-3 thr 0.696 FRR 0.002 FAR 0.019 | change thr 0.567 catches 0.852 of different-speaker pairs
+chunk 2.0s: raw thr 0.719 FRR 0.000 FAR 0.021 | median-of-3 thr 0.718 FRR 0.000 FAR 0.019 | change thr 0.621 catches 0.906 of different-speaker pairs
+chunk 3.0s: raw thr 0.74 FRR 0.000 FAR 0.014 | median-of-3 thr 0.746 FRR 0.000 FAR 0.010 | change thr 0.676 catches 0.960 of different-speaker pairs

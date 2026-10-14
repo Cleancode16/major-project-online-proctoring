@@ -1,0 +1,10 @@
+﻿V2 [legacy] samples=38 first=0.000s last=12.423s spacing mean=0.336s min=0.336 max=0.336 coverage=98% of 12.66s
+V2 [v2] samples=38 first=0.000s last=12.355s spacing mean=0.334s min=0.302 max=0.336 coverage=98% of 12.66s
+V3 [legacy] baseline yaw=12.0 pitch=1.0 roll=2.0 (true (-14.0, 11.0, 1.0)) accepted=3/3 max abs error=26.0 deg
+V3 [v2] baseline yaw=-14.7 pitch=10.5 roll=0.9 (true (-14.0, 11.0, 1.0)) accepted=7/10 max abs error=0.7 deg
+V3 [v2 side-camera] baseline set=True fallback=True yaw=40.0 after t=10.0s
+V4 [legacy] per-sample TP=10 FP=3 FN=0 (truth positives=10)
+V4 [v2] per-sample TP=10 FP=0 FN=0 (truth positives=10)
+V2: PASS
+V3: PASS
+V4: PASS

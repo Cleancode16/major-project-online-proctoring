@@ -1,0 +1,9 @@
+(a) same person, 2 boxes: v2=1 (v1 legacy=2); two people: v2=2
+(b) YOLO 1 person + 2 faces: v2=2 (yolo_n=1); v1 would report 1
+(c) zidane.jpg: expected 2, v2=2 (yolo_n=2, faces=1), v1(yolov8n)=2
+(c) bus.jpg: expected 4, v2=4 (yolo_n=4, faces=2), v1(yolov8n)=3
+(d) yolov8n.pt: {0: 'person', 67: 'cell phone', 73: 'book', 63: 'laptop'}
+(d) yolov8s.pt: {0: 'person', 67: 'cell phone', 73: 'book', 63: 'laptop'}
+(e) raw [0, 0, 1, 0, 0, 0, 1, 1, 0, 1, 1, 0, 0]
+    out [0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0] (expected [0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0])
+V7/V8 SCENE: PASS

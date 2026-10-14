@@ -1,0 +1,559 @@
+{
+  "meta": {
+    "created": "2026-10-14 18:22:43",
+    "profile": "v2",
+    "python": "3.10.0",
+    "candidate": "e2e_candidate",
+    "video_path": "C:\\Users\\bhara\\Downloads\\mini_project_final\\Online-Proctoring-System\\tests\\data\\synthetic\\e2e_clip.mp4",
+    "audio_source": "video",
+    "reference": "embedding",
+    "voiceprint": true
+  },
+  "verdict": {
+    "label": "INVALID",
+    "headline": "Prohibited object detected (31.6% of samples, longest event 4.0 s)",
+    "reasons": [
+      "Prohibited object detected (31.6% of samples, longest event 4.0 s)",
+      "Voice does not match the enrolled candidate (19.0% of seconds, longest event 2.4 s)"
+    ],
+    "score": 63.1
+  },
+  "per_violation": {
+    "IDENTITY_MISMATCH": {
+      "source": "video",
+      "unit": "samples",
+      "numerator": 0,
+      "denominator": 38,
+      "percentage": 0.0,
+      "duration_s": 0.0,
+      "count": 0,
+      "measurable": true,
+      "longest_event_s": 0.0,
+      "weight": 3.0,
+      "saturation_pct": 20,
+      "critical": true,
+      "contribution": 0.0
+    },
+    "HEAD_POSE_DEVIATION": {
+      "source": "video",
+      "unit": "samples",
+      "numerator": 4,
+      "denominator": 28,
+      "percentage": 14.29,
+      "duration_s": 1.33,
+      "count": 1,
+      "measurable": true,
+      "longest_event_s": 1.34,
+      "weight": 1.0,
+      "saturation_pct": 25,
+      "critical": false,
+      "contribution": 0.572
+    },
+    "GAZE_AWAY": {
+      "source": "video",
+      "unit": "samples",
+      "numerator": 0,
+      "denominator": 28,
+      "percentage": 0.0,
+      "duration_s": 0.0,
+      "count": 0,
+      "measurable": true,
+      "longest_event_s": 0.0,
+      "weight": 0.75,
+      "saturation_pct": 30,
+      "critical": false,
+      "contribution": 0.0
+    },
+    "MULTIPLE_PERSONS": {
+      "source": "video",
+      "unit": "samples",
+      "numerator": 4,
+      "denominator": 38,
+      "percentage": 10.53,
+      "duration_s": 1.33,
+      "count": 1,
+      "measurable": true,
+      "longest_event_s": 1.34,
+      "weight": 3.0,
+      "saturation_pct": 10,
+      "critical": true,
+      "contribution": 1.0
+    },
+    "PROHIBITED_OBJECT": {
+      "source": "video",
+      "unit": "samples",
+      "numerator": 12,
+      "denominator": 38,
+      "percentage": 31.58,
+      "duration_s": 4.0,
+      "count": 1,
+      "measurable": true,
+      "longest_event_s": 3.99,
+      "weight": 3.0,
+      "saturation_pct": 10,
+      "critical": true,
+      "contribution": 1.0
+    },
+    "FACE_NOT_VISIBLE": {
+      "source": "video",
+      "unit": "samples",
+      "numerator": 0,
+      "denominator": 38,
+      "percentage": 0.0,
+      "duration_s": 0.0,
+      "count": 0,
+      "measurable": true,
+      "longest_event_s": 0.0,
+      "weight": 1.5,
+      "saturation_pct": 20,
+      "critical": false,
+      "contribution": 0.0
+    },
+    "SPEECH_DETECTED": {
+      "source": "audio",
+      "unit": "seconds",
+      "numerator": 1.44,
+      "denominator": 12.61,
+      "percentage": 11.42,
+      "duration_s": 1.44,
+      "count": 1,
+      "measurable": true,
+      "longest_event_s": 1.44,
+      "weight": 1.0,
+      "saturation_pct": 20,
+      "critical": false,
+      "contribution": 0.571
+    },
+    "VOICE_MISMATCH": {
+      "source": "audio",
+      "unit": "seconds",
+      "numerator": 2.4,
+      "denominator": 12.61,
+      "percentage": 19.03,
+      "duration_s": 2.4,
+      "count": 1,
+      "measurable": true,
+      "longest_event_s": 2.4,
+      "weight": 3.0,
+      "saturation_pct": 10,
+      "critical": true,
+      "contribution": 1.0
+    },
+    "MULTIPLE_SPEAKERS": {
+      "source": "audio",
+      "unit": "seconds",
+      "numerator": 3.84,
+      "denominator": 12.61,
+      "percentage": 30.45,
+      "duration_s": 3.84,
+      "count": 2,
+      "measurable": true,
+      "longest_event_s": 1.92,
+      "weight": 2.0,
+      "saturation_pct": 10,
+      "critical": false,
+      "contribution": 1.0
+    },
+    "WHISPERING": {
+      "source": "audio",
+      "unit": "seconds",
+      "numerator": 0.0,
+      "denominator": 12.61,
+      "percentage": 0.0,
+      "duration_s": 0.0,
+      "count": 0,
+      "measurable": true,
+      "longest_event_s": 0.0,
+      "weight": 1.5,
+      "saturation_pct": 10,
+      "critical": false,
+      "contribution": 0.0
+    },
+    "SUSPICIOUS_SOUND": {
+      "source": "audio",
+      "unit": "seconds",
+      "numerator": 2.4,
+      "denominator": 12.61,
+      "percentage": 19.03,
+      "duration_s": 2.4,
+      "count": 1,
+      "measurable": true,
+      "longest_event_s": 2.4,
+      "weight": 1.0,
+      "saturation_pct": 20,
+      "critical": false,
+      "contribution": 0.952
+    }
+  },
+  "timeline": [
+    {
+      "type": "MULTIPLE_SPEAKERS",
+      "source": "audio",
+      "start_s": 2.16,
+      "end_s": 4.08,
+      "duration_s": 1.92,
+      "n": 4,
+      "peak": 1.0,
+      "details": {}
+    },
+    {
+      "type": "MULTIPLE_SPEAKERS",
+      "source": "audio",
+      "start_s": 6.0,
+      "end_s": 7.92,
+      "duration_s": 1.92,
+      "n": 4,
+      "peak": 1.0,
+      "details": {}
+    },
+    {
+      "type": "VOICE_MISMATCH",
+      "source": "audio",
+      "start_s": 6.0,
+      "end_s": 8.4,
+      "duration_s": 2.4,
+      "n": 5,
+      "peak": 0.51,
+      "details": {
+        "min_similarity": 0.49,
+        "threshold": 0.72
+      }
+    },
+    {
+      "type": "SPEECH_DETECTED",
+      "source": "audio",
+      "start_s": 7.92,
+      "end_s": 9.36,
+      "duration_s": 1.44,
+      "n": 3,
+      "peak": 0.904,
+      "details": {}
+    },
+    {
+      "type": "PROHIBITED_OBJECT",
+      "source": "video",
+      "start_s": 8.7,
+      "end_s": 12.69,
+      "duration_s": 3.99,
+      "n": 12,
+      "peak": 0.767,
+      "details": {
+        "objects": [
+          "Cell Phone"
+        ]
+      },
+      "sample_t": 9.032,
+      "evidence": "evidence_004_prohibited_object_8.7s.jpg"
+    },
+    {
+      "type": "SUSPICIOUS_SOUND",
+      "source": "audio",
+      "start_s": 9.84,
+      "end_s": 12.24,
+      "duration_s": 2.4,
+      "n": 5,
+      "peak": 0.894,
+      "details": {
+        "category": "phone",
+        "scores": {
+          "phone": 0.894,
+          "music": 0.154,
+          "tv_radio": 0.1
+        }
+      }
+    },
+    {
+      "type": "HEAD_POSE_DEVIATION",
+      "source": "video",
+      "start_s": 11.35,
+      "end_s": 12.69,
+      "duration_s": 1.34,
+      "n": 4,
+      "peak": 18.7,
+      "details": {
+        "rel_yaw": -6.7,
+        "rel_pitch": -9.0,
+        "rel_roll": -18.7
+      },
+      "sample_t": 11.684,
+      "evidence": "evidence_006_head_pose_deviation_11.3s.jpg"
+    },
+    {
+      "type": "MULTIPLE_PERSONS",
+      "source": "video",
+      "start_s": 11.35,
+      "end_s": 12.69,
+      "duration_s": 1.34,
+      "n": 4,
+      "peak": 2,
+      "details": {
+        "max_persons": 2
+      },
+      "sample_t": 11.684,
+      "evidence": "evidence_007_multiple_persons_11.3s.jpg"
+    }
+  ],
+  "video": {
+    "fps": 29.78463418359554,
+    "frames": 377,
+    "duration_s": 12.657533333333333,
+    "width": 1920,
+    "height": 1080,
+    "n_samples": 38,
+    "sample_rate_hz": 3.0,
+    "baseline": {
+      "yaw": -16.252402314689142,
+      "pitch": 11.397228031675368,
+      "roll": 2.5199803603131903,
+      "gaze_h": 0.4686500694202031,
+      "gaze_v": 0.42670648721442317,
+      "n_samples": 10,
+      "n_seen": 10,
+      "t_end": 3.021692307692308,
+      "fallback": false
+    },
+    "calibration": {
+      "accepted": 10,
+      "seen": 10,
+      "config": {
+        "mode": "duration",
+        "duration_s": 3.0,
+        "count": 3,
+        "min_samples": 5,
+        "max_duration_s": 10.0,
+        "aggregate": "median",
+        "require_identity": true,
+        "max_abs_yaw": 25.0,
+        "max_abs_pitch": 25.0
+      }
+    }
+  },
+  "audio": {
+    "status": "ok",
+    "duration_s": 12.61,
+    "speech_s": 6.2,
+    "vad_engine": "silero",
+    "voiceprint": true,
+    "segments": [
+      [
+        1.02,
+        3.84
+      ],
+      [
+        6.01,
+        8.42
+      ],
+      [
+        8.54,
+        9.51
+      ]
+    ]
+  },
+  "warnings": [],
+  "thresholds": {
+    "sampling": {
+      "mode": "fps",
+      "fps": 3.0,
+      "every_n": 10,
+      "max_samples": null
+    },
+    "calibration": {
+      "mode": "duration",
+      "duration_s": 3.0,
+      "count": 3,
+      "min_samples": 5,
+      "max_duration_s": 10.0,
+      "aggregate": "median",
+      "require_identity": true,
+      "max_abs_yaw": 25.0,
+      "max_abs_pitch": 25.0
+    },
+    "head_pose": {
+      "euler": "fixed",
+      "yaw_thr": 15.0,
+      "pitch_thr": 10.0,
+      "roll_thr": 10.0,
+      "smooth_window": 3,
+      "persist_s": 1.0
+    },
+    "gaze": {
+      "method": "v2",
+      "legacy_low": 0.35,
+      "legacy_high": 0.65,
+      "deg_per_ratio_h": 140.0,
+      "deg_per_ratio_v": 50.0,
+      "h_thr_deg": 22.0,
+      "v_thr_deg": 25.0,
+      "min_eye_deg": 8.0,
+      "blink_open_ratio": 0.12,
+      "smooth_window": 3,
+      "persist_s": 1.0,
+      "camera_mirrored": false
+    },
+    "face": {
+      "det_confidence": 0.6,
+      "select": "best_match",
+      "clamp_bbox": true,
+      "crop_margin": 0.3,
+      "metric": "cosine",
+      "cos_threshold": 0.415,
+      "euclid_threshold": 1.0,
+      "smooth_window": 5,
+      "persist_s": 2.0,
+      "mesh_max_faces": 3,
+      "mesh_must_match": true,
+      "min_face_px": 40
+    },
+    "persons": {
+      "method": "fused",
+      "yolo_conf": 0.5,
+      "dedupe_iou": 0.6,
+      "min_area_frac": 0.01,
+      "persist_s": 1.0
+    },
+    "objects": {
+      "method": "v2",
+      "weights": "yolov8s.pt",
+      "classes": {
+        "67": "Cell Phone",
+        "73": "Book",
+        "63": "Laptop"
+      },
+      "conf": {
+        "67": 0.35,
+        "73": 0.4,
+        "63": 0.5
+      },
+      "legacy_conf": 0.4,
+      "persist_k": 2,
+      "persist_n": 3,
+      "imgsz": 640
+    },
+    "face_not_visible": {
+      "enabled": true,
+      "persist_s": 2.0
+    },
+    "audio": {
+      "sr": 16000,
+      "enabled": true,
+      "silent_rms_dbfs": -80.0
+    },
+    "vad": {
+      "engine": "silero",
+      "start_threshold": 0.5,
+      "end_threshold": 0.35,
+      "min_silence_ms": 300,
+      "min_speech_ms": 250,
+      "speech_pad_ms": 100,
+      "webrtc_mode": 2,
+      "window_speech_frac": 0.5
+    },
+    "enroll": {
+      "record_s": 25.0,
+      "min_voiced_s": 8.0,
+      "min_snr_db": 10.0,
+      "warn_snr_db": 15.0,
+      "max_clip_frac": 0.001,
+      "min_level_dbfs": -45.0,
+      "warn_level_dbfs": -38.0,
+      "asr_enabled": false,
+      "asr_min_match": 0.6,
+      "asr_model_dir": "C:\\Users\\bhara\\Downloads\\mini_project_final\\Online-Proctoring-System\\models\\vosk-model-small-en-us-0.15",
+      "chunk_s": 3.0,
+      "min_consistency": 0.75,
+      "max_attempts": 3
+    },
+    "yamnet": {
+      "thresholds": {
+        "speech": 0.5,
+        "whisper": 0.3,
+        "phone": 0.3,
+        "music": 0.4,
+        "tv_radio": 0.3,
+        "typing": 0.3
+      },
+      "suspicious": [
+        "phone",
+        "music",
+        "tv_radio"
+      ],
+      "persist_k": 2,
+      "persist_n": 3,
+      "suspicious_gap_s": 2.0,
+      "voiced_frac_whisper": 0.15,
+      "voicing_corr": 0.5
+    },
+    "speaker": {
+      "chunk_s": 2.0,
+      "verify_thr": 0.72,
+      "diff_thr": 0.62,
+      "smooth": 3,
+      "persist_s": 2.0,
+      "multi_window_s": 10.0
+    },
+    "audio_policy": {
+      "speech": "flag_after",
+      "allow_speech_s": 5.0
+    },
+    "aggregation": {
+      "include_calibration_in_numerator": false,
+      "verdict": "v2",
+      "weights": {
+        "IDENTITY_MISMATCH": 3.0,
+        "MULTIPLE_PERSONS": 3.0,
+        "PROHIBITED_OBJECT": 3.0,
+        "VOICE_MISMATCH": 3.0,
+        "MULTIPLE_SPEAKERS": 2.0,
+        "WHISPERING": 1.5,
+        "FACE_NOT_VISIBLE": 1.5,
+        "HEAD_POSE_DEVIATION": 1.0,
+        "SPEECH_DETECTED": 1.0,
+        "SUSPICIOUS_SOUND": 1.0,
+        "GAZE_AWAY": 0.75
+      },
+      "saturation_pct": {
+        "IDENTITY_MISMATCH": 20,
+        "MULTIPLE_PERSONS": 10,
+        "PROHIBITED_OBJECT": 10,
+        "VOICE_MISMATCH": 10,
+        "MULTIPLE_SPEAKERS": 10,
+        "WHISPERING": 10,
+        "FACE_NOT_VISIBLE": 20,
+        "HEAD_POSE_DEVIATION": 25,
+        "SPEECH_DETECTED": 20,
+        "SUSPICIOUS_SOUND": 20,
+        "GAZE_AWAY": 30
+      },
+      "critical": [
+        [
+          "IDENTITY_MISMATCH",
+          50.0,
+          10.0,
+          "Unauthorized person detected"
+        ],
+        [
+          "MULTIPLE_PERSONS",
+          20.0,
+          3.0,
+          "Multiple persons detected"
+        ],
+        [
+          "PROHIBITED_OBJECT",
+          15.0,
+          3.0,
+          "Prohibited object detected"
+        ],
+        [
+          "VOICE_MISMATCH",
+          10.0,
+          5.0,
+          "Voice does not match the enrolled candidate"
+        ]
+      ],
+      "invalid_score": 60.0,
+      "suspicious_score": 20.0,
+      "audio_silent_is_suspicious": true,
+      "max_thumbnails": 400
+    }
+  }
+}

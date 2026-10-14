@@ -1,0 +1,7 @@
+(a) iris 0.2 towards image-left: v2 h=0.300 (per-eye 0.30/0.30) -> Looking Right (-28.0 deg); legacy left=0.30 right=-0.70 -> Looking Right; legacy with centred iris -> Looking Right (avg 0.00)
+(b) head +20 / eyes counter-rotated -> away=False (+0.0 deg); eyes +35 -> away=True Looking Left; head +30 eyes fixed -> away=False (left to HEAD_POSE); eyes down dv=0.6 -> away=True Looking Down
+(c) mirror symmetry |h - (1 - h_flipped)| over 8 real frames: v2 max=0.032, legacy max=1.007
+(d) [legacy] t<8 s, candidate looking at screen: GAZE_AWAY 24/24 samples (100%); h range -0.155..0.020
+(d) [v2] t<8 s, candidate looking at screen: GAZE_AWAY 0/14 samples (0%); h range 0.341..0.518, combined gaze_h -2.1..+12.7 deg
+    v2 baseline: {'yaw': -16.252402314689142, 'pitch': 11.397228031675368, 'roll': 2.5199803603131903, 'gaze_h': 0.4686500694202031, 'gaze_v': 0.42670648721442317, 'n_samples': 10, 'n_seen': 10, 't_end': 3.0217002652519893, 'fallback': False}
+V5 GAZE: PASS

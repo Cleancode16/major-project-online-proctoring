@@ -1,0 +1,10 @@
+[PASS] good_reading       ok=True  voiced=14.35 snr=30.3 level=-24.7 clip=0.0 consistency=0.874 asr=None -> -
+[PASS] silence_only       ok=False voiced=0.0 snr=-185.0 level=-240.0 clip=0.0 consistency=0.0 asr=None -> Only 0.0 s of speech was detected (need 8 s). Please read the whole passage aloud.
+[PASS] muted_mic          ok=False voiced=- snr=- level=- clip=- consistency=- asr=None -> The microphone is silent: it may be muted or blocked by Windows privacy settings (Settings > Privacy & securit
+[PASS] too_quiet          ok=False voiced=14.32 snr=24.3 level=-50.7 clip=0.0 consistency=0.891 asr=None -> Too quiet: speak up or move closer to the microphone.
+[PASS] clipped            ok=False voiced=14.7 snr=50.3 level=-4.7 clip=0.13867 consistency=0.893 asr=None -> Too loud: the recording is clipping. Move back from the microphone or lower the input volume.
+[PASS] noisy              ok=False voiced=14.48 snr=4.3 level=-22.7 clip=0.0 consistency=0.931 asr=None -> Too noisy: background noise is close to your voice level. Move somewhere quieter.
+[PASS] two_voices         ok=False voiced=14.16 snr=30.4 level=-24.6 clip=0.0 consistency=0.664 asr=None -> The voice in the recording is not consistent (another voice or heavy noise). Please record again alone in a qu
+[PASS] wrong_passage_asr  ok=False voiced=14.02 snr=30.4 level=-24.6 clip=0.0 consistency=0.846 asr=0.103 -> The recording does not match the passage (word match 10%). Please read the passage shown on screen.
+[PASS] right_passage_asr  ok=True  voiced=14.35 snr=30.3 level=-24.7 clip=0.0 consistency=0.874 asr=0.923 -> -
+A3 ENROLLMENT: PASS (9 pass, 0 skipped)

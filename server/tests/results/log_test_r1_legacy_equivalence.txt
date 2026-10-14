@@ -1,0 +1,3 @@
+samples: ours=38 baseline=38
+baseline (legacy profile): {'yaw': 11.699462059358844, 'pitch': -168.15075692530544, 'roll': 2.2555847305034025, 'gaze_h': -0.0035177557146065705, 'gaze_v': None, 'n_samples': 3, 'n_seen': 3, 't_end': 0.6714889478337754, 'fallback': False}
+R1 LEGACY EQUIVALENCE: PASS

@@ -2,7 +2,1167 @@
                     ONLINE PROCTORING SYSTEM - FLOW DOCUMENTATION
 ================================================================================
 
-TABLE OF CONTENTS
+CHANGELOG (newest first; details in plan.md)
+--------------------------------------------
+v2.0 (2026-10-14)
+  - Added PART II "CURRENT FLOW (v2)"; PART I (sections 1-7) is kept
+    unchanged as the v1 reference. Where they disagree, PART II is current.
+  - Video accuracy: head-pose Euler fix, time-based sampling (3 fps, whole
+    video), robust calibration, temporal smoothing/persistence, gaze rewrite
+    (both eyes, vertical, head compensation), LFW-calibrated face threshold
+    and best-match subject, fused person count, YOLOv8s + per-class
+    confidence + persistence, FACE_NOT_VISIBLE, measurable-sample
+    denominators.
+  - Audio: voice enrollment (passage, VAD, quality, optional Vosk ASR,
+    Resemblyzer voiceprint), Silero VAD, YAMNet events, speaker
+    verification + multiple speakers, whisper cue, audio events.
+  - Aggregation: per-type %, weighted 0-100 score, VALID / SUSPICIOUS /
+    INVALID with critical overrides, JSON report with evidence.
+  - Architecture: client/ (React, existing components adapted) and
+    server/ (Python: Flask REST + aiortc WebRTC live analysis, CLI app.py,
+    tests). v1 scripts kept in server/legacy/. The interim Streamlit UI
+    was removed. Log: plan.md.
+  - Accuracy (HP2/GZ2, VAD2/MP2/OB2): person-specific head-pose template,
+    gaze corner-line + weighting, hysteresis + capped adaptation; VAD
+    high-pass, smoothing and segment validation; static-face rejection and
+    face-confirmed persons; ROI object pass and weak-detection promotion.
+  - Evidence (EV1): grouped evidence package (voice clips; object,
+    multiple-face and head-pose snapshots), per-group counters with
+    thresholds, session violation, upload of exceeded groups (§C.5, §C.6).
+  - Environment: pinned audio stack in .venv (§A.1).
+v1.0  Original video-only pipeline (app.py), documented in PART I.
+
+================================================================================
+PART II - CURRENT FLOW (v2)
+================================================================================
+
+TABLE OF CONTENTS (PART II)
+  A  VIDEO     A.1 Environment  A.2 Architecture + schema  A.3 Sampling
+               A.4 Calibration  A.5 Head pose  A.6 Gaze  A.7 Face verification
+               A.8 Multiple persons  A.9 Prohibited objects
+               A.10 Face not visible + denominators
+  B  AUDIO     B.1 Sources  B.2 VAD  B.3 Voice enrollment  B.4 Windows + YAMNet
+               B.5 Speaker verification + multiple speakers  B.6 Events + time
+  C  AGGREGATION  C.1 Statistics  C.2 Score + weights  C.3 Verdict  C.4 Report
+  D  USER INTERFACE (React)  D.1 Enrollment  D.2 Test  D.3 Results
+  E  SERVER API + WEBRTC     E.1 REST  E.2 Live session  E.3 Recorded jobs
+  All values are in config.py (profile "v2"; profile "legacy" = v1).
+
+
+A.1 ENVIRONMENT
+---------------
+Interpreter: .venv (Python 3.10.0), the env used by start-backend.ps1.
+Pinned audio stack (do not change without updating plan.md):
+  tensorflow==2.15.1  tensorflow-hub==0.16.1  tf-keras==2.15.0
+  numpy==1.26.4  scipy==1.13.1  sounddevice==0.5.6  soundfile==0.12.1
+  resampy==0.4.3
+Kept from v1: keras==2.15.0, keras-facenet, mediapipe==0.10.9,
+  protobuf==3.20.3, ultralytics, torch (CPU).
+Added:
+  resemblyzer (speaker d-vector encoder; PyTorch; weights ship inside the
+    wheel, so it works offline). Installed with --no-deps so it cannot move
+    the TF/numpy pins; its real deps (librosa, webrtcvad-wheels) are added
+    explicitly.
+  silero-vad (VAD model; PyTorch JIT; weights ship inside the wheel).
+  webrtcvad-wheels (VAD fallback, prebuilt Windows wheel).
+  imageio-ffmpeg (bundled ffmpeg binary, used only to pull the audio track
+    out of a video file; no system ffmpeg needed).
+  aiortc (WebRTC for live proctoring, PART II-E; listed in
+    server/requirements.txt, installed by start-backend.ps1). Streamlit was
+    installed for an interim UI and is no longer used (removed from the
+    requirements list; still present in .venv until uninstalled).
+Rollback: tests/results/env_freeze_before.txt (pip freeze before E1).
+setuptools is pinned <70 because tensorflow-hub 0.16.1 imports pkg_resources.
+
+
+A.2 ARCHITECTURE
+----------------
+Repository layout (since S1):
+  client/proctoring/        React (Vite + Tailwind) frontend - the existing
+                            components, adapted: SetupScreen (enrollment),
+                            ProctoringSession (live WebRTC test + recorded
+                            video), Statistics (results), AlertPanel,
+                            StatusIndicator
+  server/                   Python backend (everything below lives here)
+    server.py               Flask REST API + WebRTC signalling (PART II-E)
+    webrtc_session.py       LiveSession: WebRTC media in -> analyzers ->
+                            status out over the data channel
+    app.py                  CLI for offline analysis
+  .venv/                    Python env (repo root; start-backend.ps1 uses it)
+  plan.md, flow.txt, README.md
+
+Backend modules (paths relative to server/):
+  config.py                 ALL thresholds, weights and switches (one place).
+                            PROFILES = {"v2": current defaults,
+                                        "legacy": reproduces v1 app.py}
+  video/models.py           lazy, cached model loaders (FaceNet, MediaPipe, YOLO)
+  video/face.py             face detection (all faces), subject selection,
+                            embedding, verification
+  video/head_pose.py        solvePnP + Euler extraction
+  video/gaze.py             iris ratios (horizontal + vertical), gaze decision
+  video/detectors.py        YOLO persons / prohibited objects
+  video/temporal.py         smoothing + persistence helpers (shared with audio)
+  video/pipeline.py         VideoAnalyzer: sampling, calibration, per-sample
+                            results -> per-sample flags
+  audio/io.py               mic capture, video audio-track extraction, resample
+  audio/vad.py              Silero VAD (+ webrtcvad fallback), hysteresis
+  audio/quality.py          SNR / clipping / level checks
+  audio/speaker.py          Resemblyzer d-vector voiceprints + verification
+  audio/yamnet.py           YAMNet scores -> violation categories
+  audio/enrollment.py       passages + voice enrollment flow
+  audio/monitor.py          AudioAnalyzer: per-window results -> flags
+  aggregation/events.py     Event schema, flags -> merged timed events
+  aggregation/aggregate.py  per-type stats, weighted score, verdict
+  aggregation/report.py     JSON report + console summary
+  enrollment_store.py       local storage of face + voice references
+  proctor.py                offline orchestration (video file -> report)
+  app.py                    CLI over the same pipeline (replaces v1 script;
+                            the v1 script is preserved in legacy/app_v1.py,
+                            the v1 Flask/Socket.IO server in
+                            legacy/server_v1.py)
+
+Both entry points (CLI and UI) call the same objects:
+  VideoAnalyzer.process(frame_bgr, t_seconds) -> VideoSample
+  AudioAnalyzer.process(chunk_16k, t_seconds) -> [AudioWindow]
+  aggregate(video_samples, audio_windows, meta) -> report dict
+so live (webcam/mic) and offline (video file) runs share all logic.
+
+SHARED SAMPLE / EVENT SCHEMA
+  VideoSample (one per sampled frame, time-based):
+    t (s from test start), phase ("calibration"|"analysis"),
+    face_visible (bool), n_faces, identity_sim (cosine), identity_ok,
+    yaw/pitch/roll (deg), rel_yaw/rel_pitch/rel_roll,
+    gaze_h / gaze_v (ratios), gaze_label,
+    persons (fused count), objects {name: max_conf},
+    flags {VIOLATION_TYPE: bool}   <- after smoothing/persistence
+  AudioWindow (one per 0.96 s window, 0.48 s hop):
+    t_start, t_end, speech_prob, is_speech, yamnet_top [(class, score)],
+    speaker_sim, flags {VIOLATION_TYPE: bool}
+  Event (merged runs of consecutive flagged samples/windows):
+    {"type", "source": "video"|"audio", "start_s", "end_s", "duration_s",
+     "peak": float, "details": {...}, "evidence": optional snapshot path}
+
+
+A.3 SAMPLING (V2)
+-----------------
+v1: every 10th frame, stop after MAX_FRAMES = 50 processed frames
+    (= 1.7 s of a 30 fps video ... and the stop never triggers on short
+    clips; a 1 h exam would be analysed for its first ~17 s only).
+v2: time based. sampling.fps = 3.0 samples/s of video time over the whole
+    video (sampling.max_samples = None). A frame is taken when its
+    timestamp t = frame_index / native_fps reaches the next sample time
+    (k / 3.0 s). Skipped frames are grab()'ed, not decoded.
+    Each sample carries t (seconds), used by every later stage, so
+    persistence and durations are in seconds, independent of camera fps.
+    Live mode: the UI calls VideoAnalyzer.process() at the same rate.
+Cost (measured on the sample clip, 1920x1080, CPU, median after warm-up,
+YOLOv8s): face detect + FaceNet 64 ms, face mesh + pose + gaze 11 ms,
+YOLO 95 ms, total ~172 ms per sample -> 3 fps needs ~0.52 s of compute per
+second of video. FaceNet runs as a compiled tf.function (37.5 ms/face vs
+236 ms for an eager call; outputs identical, max abs diff 0.0).
+
+
+A.4 CALIBRATION (V3)
+--------------------
+v1: mean of the first 3 processed frames, whoever they show and wherever
+    they look.
+v2: window = first calibration.duration_s = 3.0 s of samples.
+    A sample is ACCEPTED into the baseline only if
+      - a face is visible and face mesh succeeded,
+      - identity verified as the enrolled person (require_identity), and
+      - it is frontal enough: |yaw| <= 25 and |pitch| <= 25 (absolute,
+        after the V1 fix, so this gate is meaningful).
+    Baseline = per-axis MEDIAN of accepted samples (robust to outliers;
+    calibration.aggregate). Also stores median gaze ratios (used by §A.6).
+    Ends when >= 3.0 s elapsed AND >= min_samples = 5 accepted; if that is
+    not reached the window extends up to max_duration_s = 10 s, then uses
+    whatever was accepted (>= 1). If nothing passed the gates by then
+    (e.g. a side-mounted camera makes every frame read |yaw| > 25), the
+    baseline falls back to the median of ALL samples that had a pose and
+    the report carries calibration.fallback = true. Only if no face pose
+    was seen at all does the baseline stay unset; then pose/gaze are not
+    flagged and the report says so.
+    All samples inside the window have phase = "calibration"; they are
+    excluded from HEAD_POSE/GAZE counting only (§A.10).
+
+
+A.5 HEAD POSE
+-------------
+Problem in v1: the 3D face model uses y-up / z-towards-camera, but solvePnP
+works in the OpenCV camera frame (x right, y DOWN, z AWAY from camera). The
+recovered rotation therefore contains a 180 deg flip about x, so a frontal
+face gives pitch near +-180 deg (measured on the sample clip: baseline pitch
+-168.2 deg). Small nods then jump between +179 and -179 (wraparound).
+
+Fix (config head_pose.euler = "fixed"):
+  1. 3D model expressed in camera convention: (x, -y, -z) of the v1 model.
+     A frontal face now gives R ~ I and yaw/pitch/roll ~ 0.
+  2. 2D landmark points kept as floats (v1 truncated to int pixels).
+  3. Euler decomposition for R = Rz(roll) * Ry(yaw) * Rx(pitch):
+        pitch = atan2(R[2,1], R[2,2])
+        yaw   = atan2(-R[2,0], sqrt(R[0,0]^2 + R[1,0]^2))
+        roll  = atan2(R[1,0], R[0,0])
+     Sign convention of the output (verified by tests/test_v1_head_pose.py):
+        yaw   > 0  face turned towards IMAGE RIGHT
+        pitch > 0  face tilted DOWN (chin towards chest)
+        roll  > 0  head tilted clockwise in the image
+  4. All relative angles use wrap180(angle - baseline), so values stay in
+     [-180, 180) even near the boundary.
+Validation: synthetic projection test (known rotations -> project model ->
+solvePnP -> recovered angles within 1 deg) + frontal frames of the sample
+clip must give |pitch| < 15 deg.
+Known residual: with the generic 6-point model, a frontal face on the sample
+clip reads yaw ~ -14 deg, pitch ~ +11 deg (model/camera-intrinsics mismatch,
+constant per person and camera). The calibration baseline removes it; only
+relative angles are thresholded.
+
+Temporal rules (V4):
+  rel = wrap180(angle - baseline) per axis, then a MEDIAN over
+  head_pose.smooth_window = 3 samples (removes one-sample spikes from
+  blinks or landmark jitter). Final counts use a CENTRED median (zero
+  lag; computed at finalize). The live UI can only use a causal median,
+  which shifts each flagged run 1 sample late, so it is used for the live
+  display only.
+  raw deviation = |rel_yaw| > 15 OR |rel_pitch| > 10 OR |rel_roll| > 10
+  A deviation counts only if it persists head_pose.persist_s = 1.0 s
+  (= ceil(1.0 * sample_fps) consecutive samples, 3 at 3 fps). Once confirmed,
+  the whole run is flagged from its first sample (offline filter_runs at
+  finalize; the live UI uses a causal version that lags by persist_s).
+
+Accuracy upgrade (HP2, 2026-10-14; head_pose.method = "template"):
+  1. Person-specific rigid template. During calibration, every accepted
+     sample also stores the candidate's own MediaPipe 3D landmarks
+     (X = x*w, Y = y*h, Z = z*w; same axes as the camera frame) for
+     head_pose.rigid_ids = 33 points on bone-anchored areas: forehead /
+     temples (10, 109, 67, 103, 54, 338, 297, 332, 284), nose bridge and
+     tip (151, 9, 8, 168, 6, 197, 195, 5, 4, 1, 98, 327), eye corners
+     (33, 133, 362, 263), cheekbones / face sides (234, 454, 127, 356, 93,
+     323, 116, 345). Mouth, jaw, eyebrows and eyelids are excluded because
+     they move with expressions and speech. Each set is centred and scaled
+     to unit RMS radius; template = per-coordinate median.
+  2. Every frame: the same points, centred + scaled, are aligned to the
+     template with the Kabsch / Umeyama least-squares rotation (SVD,
+     reflection-corrected). The relative angles come straight from that
+     rotation via euler_from_matrix (same sign convention as above), so
+     no generic-face bias and no subtraction of a PnP baseline is needed.
+     33 points instead of 6 makes the estimate far less sensitive to one
+     jittery landmark. PnP (generic model) is still used for the absolute
+     "frontal enough" calibration gate.
+     Fallback: no template (no accepted calibration landmarks) -> v2 PnP
+     relative angles as before.
+  3. Hysteresis: a deviation starts when an axis exceeds its threshold
+     and ends only when every axis is back below threshold - hyst_deg
+     (3 deg), so one long turn is not split into several events by noise
+     around the threshold.
+  4. Slow baseline adaptation (posture drift in long exams): offset +=
+     (rel - offset) * dt / adapt_tau_s (120 s), applied only on samples
+     whose |rel - offset| < thr / 2 on every axis (clearly normal), and
+     |offset| is capped at adapt_max_deg (8 deg) per axis, so a slow
+     deliberate turn can never be absorbed into the baseline.
+     rel_* stored in the samples are after the offset; raw values are kept
+     as raw_rel_*.
+  Validation: tests/test_hp2_pose_gaze.py (synthetic rotations of a 3D
+  point set; NOT executed yet - the user runs the tests).
+
+
+A.6 GAZE (V5)
+-------------
+v1 bug (measured): ratio = (iris_x - outer_x) / |inner_x - outer_x| for both
+eyes. For the eye on the image-right side the outer corner (263) has the
+LARGER x, so its ratio is ~ -0.5 when centred while the other eye gives
+~ +0.5; the average is ~ 0.0 (-0.0035 on the sample clip) -> every frame is
+"Looking Right" (38/38 frames, reported as 108.6%). v1 also ignores head
+rotation and vertical gaze.
+
+v2 per eye (both eyes measured in the same image orientation):
+  a = image-left corner, b = image-right corner
+      image-left eye : a = 33,  b = 133, iris = 468, lids top 159 / bottom 145
+      image-right eye: a = 362, b = 263, iris = 473, lids top 386 / bottom 374
+  axis = b - a, L = |axis|, n = unit normal of axis pointing image-down
+  h = dot(iris - a, axis) / L^2        0 = iris at image-left corner, 0.5 centre
+  opening = dot(bottom - top, n)
+  v = dot(iris - top, n) / opening      0 = at upper lid, 1 = at lower lid
+  open_ratio = opening / L ; open_ratio < gaze.blink_open_ratio (0.12)
+      -> blink / closed eye: sample has no gaze reading (not flagged)
+  h, v = mean of both eyes (projection on the eye axis also removes roll).
+
+Decision (needs the calibration baseline h0, v0 = medians, §A.4):
+  dh = h - h0, dv = v - v0   (centred median over gaze.smooth_window = 3)
+  Eye angle from eyeball geometry: iris centre moves r*sin(theta) with
+  eyeball radius r ~ 12 mm, visible eye width ~ 30 mm, eye opening ~ 10 mm:
+      eye_yaw   = dh * gaze.deg_per_ratio_h   (140 deg per unit ratio)
+      eye_pitch = dv * gaze.deg_per_ratio_v   ( 50 deg per unit ratio)
+  Head compensation (same sign convention as §A.5, > 0 = image right / down):
+      gaze_h = rel_yaw   + eye_yaw
+      gaze_v = rel_pitch + eye_pitch
+  A screen at ~60 cm spans about +-15 deg horizontally, +-10 deg vertically.
+  GAZE_AWAY (raw) if
+      (|gaze_h| > gaze.h_thr_deg (22) and |eye_yaw|   >= gaze.min_eye_deg (8))
+   or (|gaze_v| > gaze.v_thr_deg (25) and |eye_pitch| >= gaze.min_eye_deg (8))
+  The min_eye_deg term means a pure head turn with eyes still on the screen
+  (vestibulo-ocular counter-rotation: eye_yaw ~ -rel_yaw) is NOT a gaze
+  violation; a head turn with eyes following is caught by HEAD_POSE.
+  Persistence: gaze.persist_s = 1.0 s.
+  Labels are from the candidate's point of view; with an unmirrored camera
+  (gaze.camera_mirrored = false) image right = candidate's LEFT:
+      gaze_h > 0 -> "Looking Left", < 0 -> "Looking Right",
+      gaze_v > 0 -> "Looking Down", < 0 -> "Looking Up".
+
+Accuracy upgrade (GZ2, 2026-10-14):
+  1. Iris centre = mean of the 5 iris landmarks (468-472 / 473-477)
+     instead of the single centre point 468 / 473 (less jitter).
+  2. Vertical gaze (gaze.vertical = "corner_line"): signed distance of the
+     iris centre from the line through the two eye corners, divided by
+     the eye width L (positive = below the line = looking down). The
+     corners are fixed to the skull; the eyelids follow the eye (the upper
+     lid drops when looking down), so the old lid-based ratio
+     under-reported downward gaze. Gain from the same eyeball geometry as
+     the horizontal ratio (iris shift r*sin(theta) / 30 mm eye width):
+     gaze.deg_per_ratio_v = 140 deg per unit ratio. The lids are still
+     used for the blink gate (open_ratio).
+  3. Eye weighting: h and v = average of both eyes weighted by each eye's
+     visible width L. With the head turned, the far eye is foreshortened
+     (smaller L) and its ratio is less reliable.
+  4. Hysteresis (gaze.hyst_deg = 3): once away, the gaze stays away until
+     the combined angle is below threshold - 3 deg (both axes).
+  5. Slow baseline adaptation as for head pose: offsets on dh / dv with
+     tau = gaze.adapt_tau_s (120 s), only from clearly centred samples,
+     capped at gaze.adapt_max_ratio (0.05 = ~7 deg).
+  Validation: tests/test_hp2_pose_gaze.py (NOT executed yet).
+
+
+A.7 FACE VERIFICATION (V6)
+--------------------------
+Facts checked in code: keras-facenet's model ends with an l2_normalize
+layer and outputs 512-D embeddings (v1 docs said 128-D). With unit vectors
+||a-b||^2 = 2 - 2*cos(a,b), so the v1 rule "distance < 1.0" is exactly
+"cosine >= 0.5"; the value was never derived from data.
+
+v2:
+  1. Detect ALL faces (MediaPipe full-range, conf 0.6, faces narrower than
+     face.min_face_px = 40 px ignored). Subject selection (face.select):
+       one face        -> that face
+       several faces   -> "best_match" (default): embed every face (max 3)
+                          and take the one most similar to the reference;
+                          if none reaches the threshold, take the LARGEST
+                          (ties: most central) and report a mismatch.
+     Measured on the sample clip (V6 log): with "largest", an intruder who
+     leans in close to the camera becomes the subject (identity score
+     -0.015) and his strongly tilted head produced 4 HEAD_POSE false
+     positives; the candidate was still there. v1 took the FIRST detection,
+     which has the same problem in a random way. "largest" remains
+     available as an option.
+  2. Bounding box clamped to the image (v1 could produce negative indices,
+     which wrap around in numpy slicing).
+  3. Crop with face.crop_margin of the box added on every side, resize to
+     160x160 (FaceNet was trained on crops with context margin).
+  4. score = cosine(embedding, reference). Match if score >= cos_threshold.
+     cos_threshold and crop_margin are chosen on PUBLIC data: LFW "train"
+     pairs (1100 same / 1100 different person), threshold = max accuracy,
+     then reported on the disjoint LFW "test" pairs (500/500). Run:
+     tests/calibrate_face_threshold.py. RESULT (LFW test pairs, 500/500):
+       crop                         thr    acc    FRR    FAR    AUC
+       v1 (first face, no margin)   0.50   0.967  0.062  0.004  0.988
+       v2 largest, margin 0.00      0.441  0.979  0.032  0.010  0.996
+       v2 largest, margin 0.15      0.432  0.984  0.016  0.016  0.996
+       v2 largest, margin 0.30      0.415  0.987  0.014  0.012  0.996
+     -> face.crop_margin = 0.30, face.cos_threshold = 0.415 (train max-
+     accuracy; the train FAR=1% threshold is 0.413, i.e. the same point).
+     FRR (genuine candidate rejected per sample) falls from 6.2% to 1.4%;
+     with the 5-sample vote and 2 s persistence a false IDENTITY_MISMATCH
+     needs several consecutive rejections. Caveat: LFW is press photos,
+     not webcams; MediaPipe found no face in 151 of 6400 LFW images (a
+     centre crop was used for those, same for every variant).
+  5. Temporal: identity_ok = majority vote over the last face.smooth_window
+     = 5 verified samples; IDENTITY_MISMATCH must persist face.persist_s =
+     2.0 s. A single bad crop (motion blur, half-turned face) is not a
+     mismatch; a different person sitting down for >= 2 s is.
+  The face mesh is run with up to face.mesh_max_faces = 3 faces and the mesh
+  whose landmark centre is nearest the chosen subject box is used for pose
+  and gaze. That centre must lie INSIDE the subject box; otherwise (the
+  mesh tracker only found the other person) the sample has no pose/gaze
+  reading (pose_ok = false) instead of describing the wrong person.
+
+
+A.8 MULTIPLE PERSONS (V7)
+-------------------------
+v1: YOLO person boxes with conf > 0.5 counted; > 1 = multiple. A person
+    whose body is hidden (only a face peeking in) or a duplicate box on
+    one person (full body + upper body) is miscounted.
+v2 (persons.method = "fused"):
+  yolo_n  = YOLO person boxes with conf >= persons.yolo_conf (0.5) and
+            area >= persons.min_area_frac (1%) of the frame, after
+            de-duplication: two boxes are the same person if IoU >=
+            persons.dedupe_iou (0.6) or the smaller box lies >= 80% inside
+            the larger one.
+  face_n  = MediaPipe faces (§A.7 detector, >= 40 px wide).
+  persons = max(yolo_n, face_n)
+  MAX, not SUM: the same person seen by both detectors is counted once;
+  each detector covers the other's misses (face only at the frame edge ->
+  face_n; person turned away -> yolo_n).
+  MULTIPLE_PERSONS (raw) = persons >= 2, must persist persons.persist_s
+  = 1.0 s.
+
+Accuracy upgrade (MP2, 2026-10-14):
+  1. Static-face rejection (photos, posters, a face on a screen behind
+     the candidate): faces are tracked across samples (match = IoU >= 0.3
+     with a face of the previous sample). A track is STATIC when, over its
+     last persons.static_samples = 9 samples (3 s at 3 fps), the standard
+     deviation of its centre and width is below persons.static_frac =
+     0.01 of the face width. A live person always shows micro-motion
+     larger than that. Static faces are excluded from face_n and a YOLO
+     person box whose only face is static is excluded from yolo_n. The
+     subject (verified candidate) face is never excluded.
+  2. Face-confirmed second person: YOLO person boxes with confidence
+     between persons.yolo_conf_low (0.35) and yolo_conf (0.5) count when
+     a (non-static) detected face lies inside the box. This recovers a
+     second person who is only partly in view, while low-confidence boxes
+     without a face (coats on chairs, shadows) are still ignored.
+  3. Persistence k-of-n: the run must cover persons.persist_s (1.0 s)
+     and a gap of persons.persist_gap = 1 missed sample is bridged, so one
+     detector miss does not split or cancel a visit.
+
+
+A.9b PROHIBITED OBJECTS ACCURACY UPGRADE (OB2, 2026-10-14)
+----------------------------------------------------------
+  1. Region-of-interest second pass (objects.roi_pass): when the subject's
+     face is visible, a crop around it is analysed again at the model's
+     input size: x from face_x - 1.5 w to face_x + 2.5 w, y from
+     face_y - 0.5 h to face_y + 4 h (hands, chest, desk), clipped to the
+     frame, skipped if it would cover > 60% of the frame. A 1080p frame
+     resized to 640 px leaves a phone only ~20-30 px wide; the crop gives
+     the same region ~2-3x more pixels. Boxes are mapped back to frame
+     coordinates and merged with the full-frame boxes (per class,
+     IoU >= 0.5 -> keep the higher confidence). Only prohibited classes
+     are taken from the ROI pass (persons always come from the full frame
+     so nobody is counted twice). Cost: one extra YOLO call per sample.
+  2. Weak detections with a strong anchor: a detection with confidence
+     >= objects.weak_conf (0.20) but below the class threshold marks the
+     sample "weak". At finalize, a weak sample next to (+-1 sample) a
+     confidently detected sample is promoted to detected before the
+     2-of-3 persistence. This recovers the first/last frames of an event
+     and partly hidden objects without accepting isolated weak hits.
+  3. A prohibited-object box lying >= 80% inside the subject's face box is
+     ignored (glasses / mouth / nostrils mistaken for a phone).
+  The legacy profile keeps v1 behaviour (no ROI pass, no weak promotion).
+
+
+A.9 PROHIBITED OBJECTS (V8)
+---------------------------
+Class IDs checked against the loaded model's names at start-up
+(yolov8n.pt: 63 laptop, 67 cell phone, 73 book; same as v1). A mismatch
+raises an error instead of silently detecting the wrong class.
+Per-class confidence (objects.conf): phone 0.35, book 0.40, laptop 0.50
+(v1: 0.4 for all). Phones are small and often partly covered by fingers,
+so they get the lowest threshold; laptops are large and frequently
+confused with monitors/TVs, so they get the highest.
+Persistence: PROHIBITED_OBJECT counts when seen in >= objects.persist_k = 2
+of objects.persist_n = 3 consecutive samples (a single-sample false
+detection is dropped, a one-sample miss inside a run is bridged).
+Model size (measured on the labelled sample clip, 12 phone-positive samples,
+CPU, median after warm-up):
+    yolov8n: phone recall 10/12 (0.833), precision 1.0, YOLO 51 ms/sample
+    yolov8s: phone recall 12/12 (1.000), precision 1.0, YOLO 95 ms/sample
+  -> objects.weights = "yolov8s.pt" (default). The extra ~45 ms keeps the
+  whole sample at ~172 ms, i.e. ~2x faster than real time at 3 fps. The
+  test set is small (one clip); yolov8n stays selectable in config (and is
+  what the legacy profile uses).
+Per-sample output keeps {class name: max confidence} and, for evidence
+(§C.5), the boxes {label, conf, xyxy} of every prohibited object found.
+Extra screen (EV1): COCO class 62 "tv" (monitors are labelled tv in COCO)
+added as "Extra Screen", confidence 0.50. Class ids are verified against
+objects.model_names at start-up. The legacy profile keeps the v1 classes.
+
+
+A.10 FACE NOT VISIBLE + DENOMINATORS (V9)
+-----------------------------------------
+v1 silently skipped frames without a face, so a candidate who leaves the
+camera for 10 minutes produced no evidence at all.
+v2: every sample is kept. FACE_NOT_VISIBLE (raw) = no usable face of
+    >= 40 px; must persist face_not_visible.persist_s = 2.0 s.
+    Scene detectors (persons, objects) still run on no-face samples.
+Denominators (also §C). One rule: a sample counts towards a violation type
+(numerator AND denominator) exactly when that type was measurable on it.
+  HEAD_POSE_DEVIATION, GAZE_AWAY: need the baseline -> analysis-phase
+      samples with a visible, measurable face. Calibration samples are
+      excluded (nothing to compare against yet).
+  IDENTITY_MISMATCH: every sample (calibration included) where a face was
+      visible and verified.
+  MULTIPLE_PERSONS, PROHIBITED_OBJECT, FACE_NOT_VISIBLE: every sample,
+      calibration included.
+  Why calibration is NOT excluded for the baseline-free types (changed in
+  V6 after a measured loophole): with an impostor on camera no calibration
+  sample is accepted, the window extends to 10 s, and excluding it hid the
+  impostor for those 10 s (only 7 of 38 samples were scored on the test
+  clip). A phone shown during the first 3 s would likewise be ignored.
+  (v1 counted gaze/person/object hits during calibration but divided by
+  post-calibration frames only, producing 108.6% on the sample clip; here
+  numerator and denominator always use the same sample set.)
+
+
+================================================================================
+PART II-B  AUDIO
+================================================================================
+
+B.1 AUDIO SOURCES (A1)
+----------------------
+All audio is converted to 16 kHz, mono, float32 in [-1, 1] before any model.
+  Live microphone : sounddevice.InputStream(samplerate=16000, channels=1,
+                    dtype=float32), callback appends blocks to a thread-safe
+                    buffer; t = samples_received / 16000 (test-start clock,
+                    same origin as the video sample timestamps).
+  Video file      : audio track decoded with the ffmpeg binary bundled in
+                    imageio-ffmpeg:  ffmpeg -i <video> -vn -ac 1 -ar 16000
+                    -f f32le pipe:  (stereo -> mono average, resampled by
+                    ffmpeg). t = 0 is the first video frame, so audio and
+                    video events share one time axis.
+                    No audio track -> audio analysis is skipped and the
+                    report says "audio: not available" (no audio violations
+                    are invented, and audio types are excluded from the
+                    score).
+  Audio file      : soundfile.read + resampy to 16 kHz when needed (tests,
+                    enrollment re-use).
+Source status (audio.io.source_status), checked before analysis:
+  "unavailable"     no audio track / no samples
+  "digital_silence" RMS < audio.silent_rms_dbfs (-80 dBFS): the track exists
+                    but carries no signal (muted mic, OS privacy block).
+                    Measured: the real sample clip's track is exactly 0
+                    (peak 0.000); this machine's mic gave -96.7 dBFS in the
+                    smoke test.
+  "ok"              otherwise
+For "unavailable"/"digital_silence" no audio violations are computed, audio
+types are excluded from the score, and the report + UI show
+AUDIO_SOURCE_SILENT as a warning for human review (a candidate muting the
+mic is itself worth a look, but cannot be told apart from a broken mic).
+Recordings never leave the machine; enrollment audio is not stored, only the
+voiceprint (§B.3).
+
+
+B.2 VOICE ACTIVITY DETECTION (A2)
+---------------------------------
+Primary: Silero VAD (silero-vad package, PyTorch JIT model shipped in the
+wheel). Frame = 512 samples (32 ms) at 16 kHz -> speech probability p.
+Hysteresis (vad.*):
+  speech starts when p >= start_threshold (0.5)
+  speech continues while p >= end_threshold (0.35)
+  a segment ends after min_silence_ms (300 ms) below end_threshold
+  segments shorter than min_speech_ms (250 ms) are discarded
+  each segment is padded by speech_pad_ms (100 ms) on both sides
+Output: [(start_s, end_s)] speech segments + per-frame probabilities.
+Fallback: webrtcvad (aggressiveness vad.webrtc_mode = 2, 30 ms frames) with
+the same hysteresis/min-duration rules applied to its 0/1 decisions; used
+if the Silero model cannot be loaded. The report records which VAD ran.
+Per 0.96 s analysis window (B.4) speech_frac = fraction of the window
+covered by speech segments; window is_speech if speech_frac >= 0.5.
+
+Accuracy upgrade (VAD2, 2026-10-14):
+  1. High-pass filter before the VAD: 2nd-order Butterworth at
+     vad.highpass_hz = 80 Hz, streaming (filter state kept between
+     chunks, so live and offline give the same result). Speech has almost
+     no energy below 80 Hz; mains hum, desk knocks and handling rumble do.
+  2. Probability smoothing: median over vad.prob_median = 3 frames (96 ms)
+     before the hysteresis, so one-frame spikes cannot open a segment.
+  3. Segment validation (in the audio monitor, needs YAMNet + the signal):
+     a. energy gate: segment RMS must be >= noise floor + vad.min_seg_snr_db
+        (6 dB); noise floor = 10th percentile of the 32 ms frame RMS over
+        the recording. Low enough that faint background voices and
+        whispers (typically 10+ dB above room noise) still pass.
+     b. short segments (< vad.validate_below_s = 1.0 s) are kept only if
+        the YAMNet speech category reaches vad.yamnet_confirm = 0.30 in an
+        overlapping window (coughs, clicks, knocks, chair squeaks are short
+        and are not speech for YAMNet). Longer segments are trusted to
+        Silero. YAMNet whisper >= its threshold also confirms (whispers).
+     Rejected segments are counted in the audio result (vad_rejected) and
+     are excluded from speech, speaker verification and SPEECH_DETECTED.
+
+Fix (VAD3, 2026-10-14, from the user's live report: 32 segments for ~50 s
+of speech, 13 MULTIPLE_SPEAKERS + 5 VOICE_MISMATCH + 5 WHISPERING events
+while one person was speaking):
+  1. Utterances: validated segments separated by <= vad.merge_gap_s
+     (0.8 s) are joined into utterances (natural pauses between words and
+     phrases are 0.2-0.6 s). Utterances are used for speaker verification
+     and for building audio events (events of the same type closer than
+     0.8 s are one event). Speech time / percentages still use the exact
+     segments, so no pause is counted as speech.
+  2. Speaker chunks must be >= speaker.min_chunk_s = 1.5 s of an utterance
+     (v2 allowed a single 1.0 s chunk); utterances shorter than 1.5 s get
+     no speaker decision instead of a noisy one (the thresholds were
+     calibrated on 2 s chunks).
+  3. MULTIPLE_SPEAKERS "accepted + rejected chunk in the same 10 s" rule
+     needs a margin of speaker.mix_margin = 0.05 on both sides of
+     verify_thr (min < thr - 0.05 and max >= thr + 0.05); similarities
+     hovering around the threshold no longer fire. The chunk-pair rule
+     (cos < diff_thr) is unchanged.
+  4. Whisper voicing cue (§B.4) hardened: the periodicity test now runs on
+     70-1000 Hz band-passed audio (the pitch region; removes noise and
+     codec artefacts that hid the pitch peak in the browser stream) with
+     yamnet.voicing_corr = 0.4; the cue needs voiced_frac <
+     yamnet.voiced_frac_whisper = 0.10 and speech_frac >= 0.8 (not a
+     window at the edge of speech), and WHISPERING must last
+     yamnet.whisper_persist = 3 consecutive windows (~1.5 s).
+
+
+B.3 VOICE ENROLLMENT (A3)
+-------------------------
+Happens on the enrollment screen right after the reference photo.
+  1. Consent notice is shown: face image + voiceprint are collected for
+     proctoring, stored only on this computer (data/enrollment/<id>/), never
+     uploaded. Enrollment cannot start until the box is ticked.
+  2. A passage is picked at random from audio/passages.py (4 original,
+     phonetically varied passages, ~45-55 words, ~15-20 s read aloud).
+     Rotating passages makes replaying a single prerecorded clip fail the
+     optional ASR check.
+  3. Record enroll.record_s = 25 s (16 kHz mono, sounddevice), with a live
+     level meter in the UI. (Source status §B.1 checked first: a silent mic
+     is reported immediately as "microphone muted or blocked".)
+  4. VAD (§B.2) -> voiced segments. Require voiced >= enroll.min_voiced_s
+     = 8.0 s, else "please read the whole passage aloud" + retry.
+  5. Quality (audio/quality.py), computed on the recording:
+       level_dbfs  = RMS of voiced audio
+       noise_dbfs  = RMS of non-voiced audio (or 10th percentile of 32 ms
+                     frame RMS if there is < 1 s of non-voiced audio)
+       snr_db      = level_dbfs - noise_dbfs
+       clip_frac   = fraction of samples with |x| >= 0.99
+     Fail (retry) if snr_db < enroll.min_snr_db (10), clip_frac >
+     enroll.max_clip_frac (0.001 = 0.1%), level_dbfs < enroll.min_level_dbfs
+     (-45). Warn (accept) if snr_db < 15 or level_dbfs < -38.
+     Each failure has a plain-language message ("too noisy - move somewhere
+     quieter", "too loud - move back from the microphone", "too quiet -
+     speak up or move closer").
+  6. Optional ASR check (enroll.asr_enabled, default false): Vosk small
+     English model, offline. word_match = fraction of passage words found
+     in the transcript (order-insensitive, lower-case, punctuation
+     stripped). Require >= enroll.asr_min_match (0.6). Skipped (not failed)
+     when Vosk or its model is not installed; the report records "skipped".
+  7. Voiceprint: voiced audio only (VAD segments concatenated), cut into
+     enroll.chunk_s = 3.0 s chunks; each chunk -> Resemblyzer d-vector
+     (256-D, unit norm); voiceprint = L2-normalised MEAN of the chunk
+     vectors. Consistency = mean pairwise cosine between chunk vectors;
+     consistency < enroll.min_consistency (0.75) -> retry ("more than one
+     voice or heavy noise in the recording").
+     Why Resemblyzer, not YAMNet: YAMNet classifies sound events and has no
+     speaker identity; Resemblyzer is a speaker encoder (GE2E d-vector),
+     runs on CPU in PyTorch next to TF 2.15 without touching the pins, and
+     ships its weights in the wheel (no download, fully offline).
+     SpeechBrain ECAPA would need torchaudio (+ a HuggingFace download) and
+     pins to torch versions that conflict more easily.
+  8. Up to enroll.max_attempts = 3 recordings; the best passing attempt is
+     kept. Stored: data/enrollment/<id>/voiceprint.npy + meta.json (passage
+     id, metrics, attempts, timestamp). The raw recording is NOT stored.
+
+
+B.4 AUDIO WINDOWS + YAMNET (A4)
+-------------------------------
+Window = 0.96 s (15360 samples), hop = 0.48 s; window k covers
+[0.48k, 0.48k + 0.96). Per window:
+  yamnet scores (521 AudioSet classes, model from tfhub.dev/google/yamnet/1,
+  cached in models/tfhub so later runs are offline) -> category score =
+  MAX over the AudioSet classes mapped to that category:
+    category      AudioSet classes                              thr   use
+    speech        Speech, Child speech, Narration, Conversation, 0.50  info
+                  Babbling, Speech synthesizer, Hubbub (speech  (VAD decides speech)
+                  babble). This YAMNet class map has no separate
+                  male/female speech classes (checked at load).
+    whisper       Whispering                                    0.30  WHISPERING
+    phone         Telephone, Telephone bell ringing, Ringtone,  0.30  SUSPICIOUS_SOUND
+                  Telephone dialing DTMF, Dial tone, Busy signal
+    music         Music, Musical instrument, Singing, Song       0.40  SUSPICIOUS_SOUND
+    tv_radio      Television, Radio                             0.30  SUSPICIOUS_SOUND
+    typing        Typing, Computer keyboard, Typewriter         0.30  info only
+  (yamnet.thresholds in config; set a priori from YAMNet's typical score
+  range, NOT tuned on the synthetic test scenes.)
+  Persistence (k of n consecutive windows, gaps bridged):
+    SUSPICIOUS_SOUND: raw hits separated by <= yamnet.suspicious_gap_s =
+    2.0 s are first joined (a ringing phone pauses between rings: real
+    cadences are 1-4 s off; on the synthetic 1 s on / 1 s off ring the
+    event otherwise split into 3), THEN the run must span >= 2 windows, so
+    one isolated window is still dropped. (Order fixed in T2: with "2 of 3
+    first, then join", a phone ringing twice in 2.6 s - one 0.90-score
+    window per ring, 1.9 s apart - was dropped entirely.)
+    WHISPERING 2 of 3.
+  Live vs offline: a batch YAMNet frame k actually spans 15600 samples
+  (96 STFT frames of 25 ms / 10 ms hop), not 15360; the live path feeds
+  exactly that span per window so live and offline scores are identical
+  (measured max difference 0.003).
+  Whisper, second cue (measured need: on the synthetic whisper scene YAMNet
+  gives Whispering 0.000 and Speech 0.99, i.e. YAMNet alone misses it):
+  whispered speech has no vocal-fold vibration, so no pitch. For each
+  32 ms frame inside VAD speech: voiced if the normalised autocorrelation
+  peak in the 2.5-12.5 ms lag range (80-400 Hz pitch) >= 0.5.
+  voiced_frac = voiced frames / speech frames in the window.
+  WHISPERING (raw) = yamnet whisper >= 0.30
+                     OR (window is speech AND voiced_frac < 0.15).
+  Caveat: the synthetic whisper test signal was itself made by removing
+  voicing, so passing it shows the rule is implemented correctly, not that
+  it is accurate on real whispering.
+  Speech windows (§B.2): speech_frac >= 0.5 of the window inside VAD
+  segments. Typing never creates a violation; it is listed in the report
+  as context (a candidate typing is normal in many exams).
+
+
+B.5 SPEAKER VERIFICATION + MULTIPLE SPEAKERS (A5)
+-------------------------------------------------
+Runs only on VAD speech (§B.2), never on silence/noise.
+  1. Each speech segment is cut into speaker.chunk_s chunks (hop = half a
+     chunk; the last partial chunk kept if >= 60% long). Each chunk ->
+     Resemblyzer d-vector e_i (256-D, unit norm), time = chunk centre.
+  2. Verification: sim_i = cos(e_i, voiceprint). Smoothed = median of the
+     chunk and its neighbours within the same segment (speaker.smooth = 3).
+     raw VOICE_MISMATCH on a chunk if smoothed sim < speaker.verify_thr.
+     VOICE_MISMATCH must persist speaker.persist_s (2.0 s of chunk time).
+  3. Multiple speakers (no voiceprint needed, also catches two strangers):
+     in every speaker.multi_window_s = 10 s window, if two chunks have
+     cos(e_i, e_j) < speaker.diff_thr -> both chunks belong to different
+     speakers -> MULTIPLE_SPEAKERS for the span between them. In addition,
+     a window holding both an accepted (sim >= verify_thr) and a rejected
+     chunk is MULTIPLE_SPEAKERS (candidate + someone else).
+  Thresholds are chosen on PUBLIC real speech, Mini LibriSpeech dev-clean-2
+  (26 speakers, 16 kHz read speech; tests/calibrate_speaker_threshold.py):
+  per speaker a ~20 s voiceprint built exactly like enrollment (§B.3), test
+  chunks from the speaker's other utterances; speakers split into a
+  calibration half (thresholds) and a held-out half (reported numbers).
+  Result (held-out 13 speakers; thresholds from the other 13; EER point;
+  tests/results/A5_speaker_calibration.json):
+     chunk   verify_thr  FRR    FAR    | diff_thr (1% same-spk  catches diff-
+                                       |  pairs below it)       speaker pairs
+     1.5 s   0.70        0.2%   1.9%   |  0.567                 85%
+     2.0 s   0.72        0.0%   1.9%   |  0.621                 91%
+     3.0 s   0.75        0.0%   1.0%   |  0.676                 96%
+     (FRR/FAR after median-of-3 smoothing)
+  -> speaker.chunk_s = 2.0, verify_thr = 0.72, diff_thr = 0.62: 2 s keeps
+     the time resolution of a short remark while staying at ~0% FRR.
+  A 10 s window with another voice holds several chunk pairs, so the
+  per-pair 91% compounds to a high per-window detection rate.
+  Caveats: LibriSpeech is clean audiobook speech; a laptop mic in a room is
+  noisier and the threshold may need re-checking on real recordings.
+
+
+B.6 AUDIO EVENTS + TIME ACCOUNTING (A6)
+---------------------------------------
+Each 0.96 s window k "owns" its central 0.48 s slot
+[0.48k + 0.24, 0.48k + 0.72), so overlapping windows never double-count
+time (the first window also owns [0, 0.24)). A flagged window adds 0.48 s
+of violation time. Audio denominator = analysed audio duration (whole
+track / live session; there is no audio calibration phase).
+  SPEECH_DETECTED   window is_speech (§B.2) AND policy says so:
+                    audio_policy.speech = "flag_after" (default): flagged
+                    once cumulative speech time > allow_speech_s = 5 s
+                    (a cough or reading a question aloud once is allowed);
+                    "flag_all": every speech window; "allow": never (info).
+  VOICE_MISMATCH    §B.5 (needs an enrolled voiceprint; without one it is
+                    not computed and the report says so)
+  MULTIPLE_SPEAKERS §B.5
+  WHISPERING        §B.4
+  SUSPICIOUS_SOUND  §B.4 (details: which category - phone/music/tv_radio)
+Events: consecutive flagged windows of one type are merged into
+  {"type", "source": "audio", "start_s", "end_s", "duration_s", "peak",
+   "details"} - the same schema as video events (§A.2), on the same clock
+  (t = 0 = start of the test / first video frame).
+Live (microphone) and offline (file) use the same AudioAnalyzer; in live
+mode audio is fed in blocks and YAMNet runs per window as audio arrives,
+the final flags/events are computed at the end (finalize), identical to
+an offline run of the same audio (tests/test_a4_a6_audio_monitor.py).
+Status reported when audio is not analysed: AUDIO_SOURCE_SILENT /
+  AUDIO_UNAVAILABLE (§B.1), never counted as a violation.
+
+
+================================================================================
+PART II-C  AGGREGATION, SCORE, VERDICT, REPORT (G1)
+================================================================================
+Input: video samples (§A) + audio windows (§B), both with final flags and
+timestamps on one clock.
+
+
+C.1 PER-TYPE STATISTICS (explicit numerator / denominator)
+  video types (unit = samples; 1 sample = 1/sample_fps seconds):
+    denominator = samples on which the type was measurable (§A.10 rule:
+                  pose/gaze skip calibration; others count from t = 0)
+    numerator   = those samples whose final flag is set
+  audio types (unit = seconds, 0.48 s slots, §B.6):
+    denominator = analysed audio duration
+    numerator   = flagged slots x 0.48 s
+  percentage = 100 * numerator / denominator
+  count      = number of merged events
+  duration_s = flagged time in seconds (video: samples / sample_fps)
+  A type that could not be measured at all (no audio, no voiceprint, no
+  baseline) is reported with measurable = false and left out of the score.
+
+
+C.2 VIOLATION SCORE (0-100, points per violation; SC2)
+  SC2 (user request): every violation gets its own score with an
+  explanation, critical violations weigh heavily, head pose a little,
+  eye gaze least. The old weighted MEAN (score = 100 * sum(w*c) / sum(w))
+  diluted a critical violation by all the clean types (a full phone
+  violation alone gave only ~15 / 100), so it was replaced by a SUM:
+    fraction_i = min(1, percentage_i / saturation_i)
+    points_i   = max_points_i * fraction_i
+    if severity_i = critical and percentage_i > 0:
+        points_i = max(points_i, critical_floor * max_points_i)   (0.5)
+    score = min(100, sum(points_i))      (unmeasurable types score 0)
+  type                severity   max points  saturation%
+  IDENTITY_MISMATCH    critical      40          20
+  MULTIPLE_PERSONS     critical      35          10
+  PROHIBITED_OBJECT    critical      35          10
+  VOICE_MISMATCH       critical      30          10
+  MULTIPLE_SPEAKERS    critical      30          10
+  WHISPERING           critical      20          10
+  FACE_NOT_VISIBLE     medium        12          20
+  HEAD_POSE_DEVIATION  low           10          25   (v1 threshold)
+  SPEECH_DETECTED      low            6          20
+  SUSPICIOUS_SOUND     low            6          20
+  GAZE_AWAY            very low       4          30   (v1 threshold)
+  Saturation = the percentage at which a type earns all its points. The
+  critical floor means one confirmed phone / second person / foreign voice
+  already costs half its points (17.5 for a phone), enough for SUSPICIOUS.
+  Head pose at its full 25% costs 10 and gaze at 30% only 4.
+  Each per_violation entry carries score, max_points, severity and
+  score_explanation, e.g. "3.2% of samples (12 of 375), 2 event(s). Full 35
+  points at 10% or more, so 3.2/10 = 32% of 35 = 11.2, raised to 17.5
+  because a critical violation scores at least 50% of its points once it
+  occurs. Score 17.5 of 35 points (critical severity)."
+  verdict.score_explanation lists the
+  sum ("Overall score 27.5 / 100 = sum of the violation points (prohibited
+  object 17.5 + head pose deviation 10.0). Score >= 50 -> INVALID, >= 15 ->
+  SUSPICIOUS; ...").
+
+
+C.3 VERDICT
+  INVALID if any critical override fires (checked in this priority order,
+  the first one is the headline reason; all are listed):
+    IDENTITY_MISMATCH  percentage > 50 (v1 majority rule) OR an event
+                       >= 10 s -> "Unauthorized person"
+    MULTIPLE_PERSONS   percentage >= 20 (v1) OR an event >= 3 s
+    PROHIBITED_OBJECT  percentage >= 15 (v1) OR an event >= 3 s
+    VOICE_MISMATCH     percentage >= 10 OR an event >= 5 s
+    MULTIPLE_SPEAKERS  percentage >= 10 OR an event >= 5 s   (SC2)
+  (The event rule is new: on the 12.7 s sample clip a second person is in
+  view for ~1.4 s = 12% of samples, below v1's 20%, so v1 said "SINGLE
+  PERSON". A 1-hour exam with a 3-minute visitor is only 5%: percentages
+  alone hide short critical events.)
+  else INVALID if score >= aggregation.invalid_score (50; was 60 for the mean)
+  else SUSPICIOUS (review required) if score >= suspicious_score (15; was 20), or
+    any CRITICAL type has at least one (persistence-filtered) event below
+    the INVALID limits (e.g. a second person for 1 s), or any soft type is
+    over its saturation %, or audio_silent_is_suspicious and the audio
+    source was silent/unavailable (§B.1).
+    (Critical-event rule added in G1: without it a 1 s second person in a
+    50 s test scored 2.9 and came out VALID; flicker is already removed by
+    persistence, so a remaining critical event deserves a human look.)
+  else VALID.
+  The legacy profile keeps v1's verdict logic (for regression only).
+
+
+C.4 OUTPUTS
+  JSON report (aggregation/report.py), data/reports/<candidate>_<time>/
+    meta        time, candidate, profile, inputs, software versions
+    verdict     label, headline reason, all reasons, score,
+                score_explanation (SC2)
+    per_violation  {type: count, duration_s, percentage, numerator,
+                    denominator, unit, severity, max_points, saturation,
+                    score, score_explanation, critical, measurable}
+    group_percentages  % of the session per evidence group (LIM2, §C.6)
+    timeline    all video + audio events sorted by start_s (one clock)
+    evidence    grouped evidence package (§C.5), files under evidence/
+    evidence_counters / session_violation   (§C.6)
+    evidence_upload   per-group upload result (§C.6)
+    audio       status, duration, speech_s, VAD engine, voiceprint used
+    baseline / calibration info, thresholds used (full config), warnings
+  PDF report (PDF1, aggregation/pdf_report.py, reportlab): report.pdf is
+    written next to report.json at the end of every session (and rebuilt
+    on demand by GET /api/reports/<id>/pdf if missing or older than the
+    JSON). Sections: header (candidate, session id, date, mode), verdict
+    box (label + icon word, score, all reasons), summary (video / audio /
+    events), warnings, session violation + evidence counters with upload
+    status, a "Scoring" section (overall score + explanation, then every
+    violation with severity, points / max and its explanation; SC2),
+    per-violation table (%, numerator / denominator, seconds,
+    events, severity, points), percentage bar chart and timeline chart
+    (video blue #2a78d6 / audio orange #eb6834, reference palette), the
+    evidence groups (head pose, multiple faces, objects: snapshots with
+    their captions; the voice clips are NOT included in the PDF / Word
+    files (DOCX1, user request) - they stay playable on the results page
+    and in evidence/voice/; voice counts still appear in the counters
+    and event tables), the full event
+    table and the main thresholds used. Only standard PDF fonts and ASCII
+    symbols are used (">=" not the Unicode sign) so every viewer renders it.
+    A failure while writing the PDF is reported in the console and never
+    breaks the JSON report. CLI for existing reports:
+      python -m aggregation.pdf_report <report.json> [out.pdf] [--evidence-dir DIR]
+    (evidence is looked up next to the JSON, then in data/reports/<id>/).
+  Word report (DOCX1, aggregation/docx_report.py, python-docx): same
+    sections as the PDF (charts given as tables), evidence snapshots in a
+    3-column grid, no voice clips. Built as report.docx on every
+    GET /api/reports/<id>/docx. The PDF is now also rebuilt on every
+    GET /api/reports/<id>/pdf (no stale copies). CLI:
+      python -m aggregation.docx_report <report.json> [out.docx] [--evidence-dir DIR]
+  meta.session_id is set for every run (live: WebRTC session id;
+  recorded video: job id; CLI: random id) and is used for the upload.
+  Console summary: v1-style block plus score, verdict and event list.
+
+
+C.5 EVIDENCE PACKAGE (EV1, aggregation/evidence.py)
+  Built at the end of every session from the final (persistence-filtered)
+  events. Four groups, each stored separately and sorted by start time:
+    group           violation types                    evidence per event
+    voice           VOICE_MISMATCH, MULTIPLE_SPEAKERS,  WAV clip (16 kHz mono) of
+                    WHISPERING (voice VIOLATIONS only;  [start - 0.5 s, end + 0.5 s],
+                    plain SPEECH_DETECTED is not        max 30 s (evidence.clip_*)
+                    evidence - user decision 2026-10-14;
+                    it stays in the statistics/timeline)
+                    Overlapping or adjacent (gap <= evidence.voice_merge_gap_s
+                    = 1.0 s) voice violations are ONE item / clip with
+                    "types" listing all of them (v2 saved one clip per type,
+                    so one stretch of talking produced 2-3 identical clips).
+    object          PROHIBITED_OBJECT                  annotated JPEG snapshot
+    multiple_faces  MULTIPLE_PERSONS                   annotated JPEG snapshot
+    head_pose       HEAD_POSE_DEVIATION                annotated JPEG snapshot
+  Snapshot frame = the "peak" sample of the event that still has a stored
+  image (object: highest confidence; multiple faces: most persons; head
+  pose: largest |angle|). Images are drawn at analysis time (only for
+  samples with a raw violation, bounded by aggregation.max_thumbnails):
+  object boxes + "label conf", face boxes + "faces: n / persons: n",
+  "dYaw dPitch dRoll" text, timestamp.
+  Metadata per item (all groups): id, type, start_s, end_s, duration_s,
+  file (relative path), plus
+    voice:          speech seconds in the clip, speaker similarity (min) and
+                    threshold when a voiceprint exists, yamnet whisper score
+    object:         objects [{label, confidence}] at the snapshot, max
+                    confidence per label over the event
+    multiple_faces: face_count, person_count at the snapshot, max persons
+    head_pose:      yaw/pitch/roll (relative, deg) at the snapshot, max
+                    |angle| per axis over the event, allowed angles
+                    (head_pose.*_thr) and allowed duration (head_pose.persist_s)
+  Files: <report dir>/evidence/<group>/<NN>_<type>_<start>s.jpg|wav and
+  <report dir>/evidence/<group>/metadata.json.
+  Detectable objects (YOLO COCO classes, objects.classes / model_names):
+  cell phone (67), book (73), laptop (63), extra screen = tv/monitor (62).
+  Earphones are NOT a COCO class: they need a custom-trained detector;
+  adding its class id/name/confidence to objects.classes, objects.conf and
+  objects.model_names (and the weights to objects.weights) is enough, the
+  rest of the pipeline is class-agnostic.
+
+
+C.6 COUNTERS, SESSION VIOLATION, UPLOAD (EV1, LIM2)
+  Counter per group = {count (evidence items), percentage (share of the
+  analysed session), basis, limit, limit_text, exceeded}.
+  LIM2 (user request): the session limit is a PERCENTAGE of the session,
+  not a number of events, except for prohibited objects (any detection):
+    group           basis    limit   percentage measured as
+    head_pose       percent  25%     HEAD_POSE_DEVIATION % of analysis samples
+    multiple_faces  percent   5%     MULTIPLE_PERSONS % of samples
+    voice           percent   5%     audio windows with VOICE_MISMATCH or
+                                     MULTIPLE_SPEAKERS or WHISPERING (union,
+                                     overlaps counted once) x 0.48 s / audio s
+    object          count     0      any prohibited-object event
+  (evidence.limits in config.py; LIM1's event limits voice 5 /
+  multiple_faces 5 became 5% each.) A group is EXCEEDED when its value is
+  GREATER than the limit (so "up to" the limit is allowed).
+  session_violation.violated = any group exceeded; a violated session is
+  never VALID (raised to SUSPICIOUS with the reason "Evidence threshold
+  exceeded: head pose (31.0% > 25% of session)", INVALID stays INVALID).
+  Live sessions show the same counters while running: count from confirmed
+  live alerts (object -> object, person -> multiple_faces, pose ->
+  head_pose, voice/whisper -> voice) and a running percentage (confirmed
+  samples / samples, head pose after calibration only; voice = audio ticks
+  with a confirmed voice or whisper alert / audio ticks); the final values
+  come from the report. Reports made before LIM2 keep their count limits
+  and are still displayed.
+  Upload: for every exceeded group, one package is sent with
+    session_id, group, violation summary (candidate, verdict, score,
+    counters + thresholds of all groups), the group's metadata and files.
+  Target (evidence_upload.url):
+    null (default) -> stored by the local backend's evidence store,
+                      data/evidence_uploads/<session_id>/<group>/
+                      (same code path as the HTTP endpoint)
+    "http(s)://.../api/evidence/upload" -> multipart POST (this backend's
+                      own endpoint or a central exam server), timeout 30 s.
+  The result per group (status uploaded/failed/skipped, target, time,
+  error) is written to report.evidence_upload. Uploading evidence to a
+  remote URL sends face snapshots and voice clips off this computer; the
+  consent text says so, and the default keeps them local.
+
+
+================================================================================
+PART II-D  USER INTERFACE (React client, C1)
+================================================================================
+Frontend: the existing React app in client/proctoring (Vite + Tailwind +
+lucide-react + axios + react-webcam). Its existing components are adapted,
+not replaced (user decision 2026-10-14; the interim Streamlit UI was removed):
+  App.jsx             step state: enrollment -> session -> results
+  SetupScreen.jsx     D.1 enrollment (was: reference photo only)
+  ProctoringSession   D.2 live test over WebRTC + recorded-video analysis
+                      (was: base64 JPEG frames over Socket.IO every 120 ms)
+  StatusIndicator     WebRTC connection state + calibration state
+  AlertPanel          live alert log (now fed by data-channel status)
+  Statistics          D.3 results report (was: running counters)
+All requests go to /api/... ; vite.config.js proxies /api to the backend on
+http://localhost:5000, so the browser only talks to one origin.
+Privacy: consent notice before enrollment; media goes browser -> local
+server only; nothing is uploaded elsewhere.
+
+Layout + theme (UI2, 2026-10-14):
+  App.jsx renders a sticky header on every screen: product name, a step
+  indicator (Enrollment -> Test -> Results, lucide icons UserCheck / Video /
+  BarChart3, current step highlighted, completed steps checked), the
+  candidate id, and a light/dark toggle (lucide Sun / Moon, aria-label +
+  tooltip). Screens render inside one centred container below it.
+  Theme: Tailwind darkMode = "class". The choice is stored in localStorage
+  ("theme"); with no stored choice the OS setting (prefers-color-scheme)
+  is used. A small inline script in index.html applies the class before
+  first paint (no light flash in dark mode). Every surface, text, border,
+  alert, badge, table and chart has a dark variant; shared styles live in
+  src/index.css (.card, .btn-*, .input, .alert-*, .stat-*, .badge-*,
+  .tab-*, .table-*). Chart series colours come from CSS variables
+  --series-video / --series-audio: light #2a78d6 / #eb6834, dark
+  #3987e5 / #d95926 (reference palette light/dark steps of slots 1-2);
+  chart text and grid lines use the theme's text/border colours.
+
+
+D.1 ENROLLMENT (SetupScreen)
+    candidate id + consent checkbox (required; the consent text explains
+    face image + voiceprint, local storage, nothing uploaded) ->
+    reference photo: react-webcam snapshot or image upload
+      -> POST /api/enrollment/face; the server reports no face / several
+      faces / face too small, else stores the face embedding ->
+    voice: passage from GET /api/enrollment/passage (random, "another
+      passage" button); "Record" uses getUserMedia + MediaRecorder for
+      enroll.record_s = 25 s with a live level meter (Web Audio
+      AnalyserNode, dBFS) and countdown; the recording (webm/opus) ->
+      POST /api/enrollment/voice; the server decodes it with ffmpeg to
+      16 kHz mono and runs §B.3.
+      Robustness (fix 2026-10-14, voice recording did not start): the
+      whole start sequence is guarded and every failure is shown on screen
+      (no secure context, no mediaDevices, permission denied/dismissed,
+      no microphone, mic in use by another app); while the browser waits
+      for permission the button shows "Waiting for microphone
+      permission..."; if MediaRecorder is missing or fails to start, the
+      recorder falls back to raw Web Audio capture encoded as 16-bit WAV
+      in the browser (the server decodes either format the same way);
+      the AudioContext is resumed explicitly so the level meter runs.
+      Result card: speech s, level, SNR,
+      clipping, consistency, ASR match; problems in red, warnings in amber;
+      attempt n of 3 ->
+    "Continue" enabled when photo and voice both passed.
+
+
+D.2 TEST (ProctoringSession)
+    Live (WebRTC):
+      getUserMedia({video, audio}) -> RTCPeerConnection, both tracks added,
+      data channel "status" created by the client -> offer (after ICE
+      gathering) -> POST /api/webrtc/offer -> answer -> connected.
+      The server analyses the received tracks (PART II-E) and sends one
+      JSON status per video sample on the data channel:
+        monitors {type: {state ok|warn|bad|na, detail}}, confirmed-event
+        counts, calibration progress, audio (speech prob, voice similarity,
+        sound category), warnings (camera black, mic silent), sample rate.
+      UI: local camera preview, badges per monitor, StatusIndicator,
+      AlertPanel entry for every newly confirmed violation, elapsed time.
+      Stop -> POST /api/session/<id>/stop -> report -> Results.
+      Evidence counters (§C.6): one tile per group (voice, object, multiple
+      faces, head pose) with count / threshold, red when exceeded, and a
+      "session marked as violated" banner as soon as one is exceeded.
+      Errors shown: camera/mic permission denied, WebRTC connection failed,
+      server error.
+    Recorded video: file upload -> POST /api/analyze-video -> job id;
+      GET /api/analyze-video/<job> polled every second for progress and the
+      latest sample's monitors; when done -> Results.
+
+
+D.3 RESULTS (Statistics)
+    Evidence (§C.5/§C.6): session-violated banner; one section per group
+    (voice, prohibited objects, multiple faces, head pose) with counter vs
+    threshold, upload status, and the items in time order - snapshots with
+    their labels / confidence / face count / angles + duration, voice items
+    as audio players with type, time and speaker similarity. Files are
+    served by GET /api/reports/<id>/files/<path>.
+    Downloads: "Download PDF" (GET /api/reports/<id>/pdf), "Download Word"
+    (GET /api/reports/<id>/docx) and "Download JSON"; PDF / Word buttons at
+    the top and again at the end of the page. They fetch the file and show
+    the server's error message if it fails (before DOCX1 a plain link
+    downloaded nothing when the server returned an error).
+    verdict banner + score, per-violation percentage bar chart (measurable
+    types, SVG, colour = source video/audio, hover tooltip with
+    numerator/denominator), timeline (video + audio events on one time
+    axis, SVG), evidence snapshots (GET /api/reports/<id>/evidence/<file>),
+    audio event table, per-violation table, warnings, "Download JSON
+    report". Colours: reference palette slot 1 (#2a78d6 video) and slot 2
+    (#eb6834 audio); verdict uses icon + text, never colour alone.
+
+
+================================================================================
+PART II-E  SERVER API + WEBRTC (S1, W1)
+================================================================================
+server/server.py (Flask, port 5000) + server/webrtc_session.py (aiortc).
+Flask handles REST; aiortc needs asyncio, so one asyncio event loop runs in
+a background thread and Flask routes hand coroutines to it with
+asyncio.run_coroutine_threadsafe (no second web framework).
+
+E.1 REST ENDPOINTS
+  GET  /api/health
+  GET  /api/enrollment/passage              {index, text}
+  GET  /api/enrollment/<candidate>          {face, voice, meta}
+  POST /api/enrollment/face                 JSON {candidate, consent, image
+                                            (data URL)} -> faces, ok/error
+  POST /api/enrollment/voice                multipart {candidate, passage,
+                                            audio} -> §B.3 result, voiceprint
+                                            stored when ok (max 3 attempts)
+  POST /api/webrtc/offer                    {candidate, sdp, type} ->
+                                            {session_id, sdp, type}
+  POST /api/session/<id>/stop               -> {report_id, report}
+  POST /api/analyze-video                   multipart {candidate, video,
+                                            use_audio} -> {job_id}
+  GET  /api/analyze-video/<job>             {status, progress, monitors,
+                                            report_id, report, error}
+  GET  /api/reports                         list of saved reports
+  GET  /api/reports/<id>                    report JSON
+  GET  /api/reports/<id>/pdf                PDF version of the report (§C.4,
+                                            rebuilt on every request,
+                                            written as report.pdf)
+  GET  /api/reports/<id>/docx               Word version of the report
+                                            (§C.4 DOCX1, rebuilt on every
+                                            request, report.docx)
+  GET  /api/reports/<id>/files/<path>       evidence file inside the report
+                                            folder (jpg / wav / json only,
+                                            path-traversal safe)
+  POST /api/evidence/upload                 multipart {session_id, group,
+                                            summary (json), metadata (json),
+                                            files[]} -> stored under
+                                            data/evidence_uploads/ (§C.6)
+  GET  /api/evidence/<session_id>           uploaded groups + manifests
+  Enrollment requires consent = true; face must be enrolled before a
+  session or analysis can start (400 otherwise).
+
+E.2 LIVE SESSION (webrtc_session.LiveSession)
+  Video track: frames are received continuously (aiortc decodes them);
+  every 1/sampling.fps s the newest frame (bgr24) is handed to a
+  single-thread executor running VideoAnalyzer.process; frames arriving
+  while it is busy are dropped (no backlog, the status stays current).
+  t = seconds since the first video frame.
+  Audio track: av.AudioResampler -> 16 kHz mono s16 -> float; buffered and
+  fed to AudioAnalyzer every 0.5 s in a second single-thread executor
+  (keeps order). Audio t = samples / 16000 from the first audio frame;
+  both tracks start together, so the clocks agree to within the WebRTC
+  start-up jitter (a few hundred ms).
+  Live flags: LivePersistence over 1 s per monitor; a monitor's confirmed
+  count increases when its live flag switches on (these are the alerts).
+  Camera black: mean brightness of the first 5 frames < 5 -> warning.
+  Mic silent: audio source status (§B.1) after 3 s of audio -> warning.
+  Stop: peer connection closed, executors drained, achieved video sample
+  rate measured and used for persistence if lower than configured
+  (persistence is defined in seconds), VideoAnalyzer/AudioAnalyzer
+  finalized, report built and saved (§C.4) with meta: mode live,
+  live_sample_rate_hz, camera_black, time per stage.
+  Sessions are kept in memory; one server process serves one or more
+  sessions, each with its own analyzers (MediaPipe graphs are not shared).
+
+E.3 RECORDED-VIDEO JOBS
+  The uploaded file is saved to data/uploads/, analysed in a background
+  thread with proctor.analyze_files (video + its audio track), progress =
+  video time / duration, the last sample's monitors are exposed for the
+  live tiles; the result is the same report as the CLI.
+
+
+TABLE OF CONTENTS (PART I, v1 reference)
 -----------------
 1. System Overview
 2. Main Flow Diagram
@@ -1197,14 +2357,10 @@ Values you can modify:
 7. YOLO confidence: 0.5 (person), 0.4 (objects)
 8. Violation thresholds: 25%, 30%, 20%, 15%
 9. MediaPipe confidence: 0.6
-
-
 ================================================================================
 END OF FLOW DOCUMENTATION
 ================================================================================
-
 For questions or clarification on any flow, refer to the corresponding
 section of this document or the inline comments in app.py.
-
 This document represents the complete logical flow of the Online Proctoring
 System as of the current implementation.

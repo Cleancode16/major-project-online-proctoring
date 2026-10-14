@@ -1,631 +1,403 @@
 import { useState, useRef, useEffect } from 'react';
-import Webcam from 'react-webcam';
-import { io } from 'socket.io-client';
-import { Play, Pause, RotateCcw, Users, Eye, Activity, Shield } from 'lucide-react';
+import axios from 'axios';
+import {
+  Play, Square, RotateCcw, Video, Upload, AlertTriangle, AlertCircle, Loader, Clock, Activity, FileVideo,
+  Mic, Smartphone, Users, MoveHorizontal, Ban,
+} from 'lucide-react';
 import StatusIndicator from './StatusIndicator';
-import Statistics from './Statistics';
 import AlertPanel from './AlertPanel';
 
-const SOCKET_URL = 'http://localhost:5000';
+// Test screen (flow.txt PART II-D, D.2).
+//  Live: webcam + mic go to the server over WebRTC; the server answers with one JSON status per video
+//        sample on the "status" data channel (server/webrtc_session.py).
+//  Recorded: a video file is uploaded and analysed as a background job; progress is polled.
 
-const ProctoringSession = ({ onReset, sessionActive, setSessionActive }) => {
-  const [socket, setSocket] = useState(null);
-  const [connected, setConnected] = useState(false);
-  const [currentFrame, setCurrentFrame] = useState(null);
+const STATE_STYLE = {
+  ok: 'badge-success',
+  warn: 'badge-warning',
+  bad: 'badge-danger',
+  na: 'badge-muted',
+};
+const STATE_WORD = { ok: 'OK', warn: 'check', bad: 'VIOLATION', na: 'n/a' };
+const WARNING_TEXT = {
+  camera_black: 'The camera image is black: the lens may be covered, a privacy shutter closed, or camera access blocked (Windows Settings > Privacy & security > Camera).',
+  mic_silent: 'The microphone is silent: it may be muted or blocked (Windows Settings > Privacy & security > Microphone). Audio cannot be monitored.',
+};
+
+// Evidence groups (flow.txt §C.5/§C.6): live counters vs configured thresholds
+const EVIDENCE_GROUPS = [
+  ['voice', 'Voice', Mic],
+  ['object', 'Objects', Smartphone],
+  ['multiple_faces', 'Multiple faces', Users],
+  ['head_pose', 'Head pose', MoveHorizontal],
+];
+
+const EvidenceCounters = ({ evidence }) => (
+  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+    {EVIDENCE_GROUPS.map(([key, label, Icon]) => {
+      const c = evidence?.[key] || { count: 0, threshold: '-', exceeded: false };
+      return (
+        <div key={key} className={`rounded-lg p-3 ring-1 ${c.exceeded
+          ? 'bg-red-50 ring-red-200 text-red-900 dark:bg-red-950/50 dark:ring-red-900 dark:text-red-100'
+          : 'surface-muted ring-slate-200 dark:ring-slate-800'}`}>
+          <p className="text-xs font-medium opacity-80 inline-flex items-center gap-1"><Icon className="w-4 h-4" /> {label}</p>
+          {c.percentage != null ? (
+            <>
+              <p className="text-xl font-bold">{c.percentage.toFixed(1)}%<span className="text-sm font-normal opacity-70"> / {c.limit_text}</span></p>
+              <p className="text-xs opacity-80">{c.count} event(s){c.exceeded ? ' · limit exceeded' : ''}</p>
+            </>
+          ) : (
+            <>
+              <p className="text-xl font-bold">{c.count}<span className="text-sm font-normal opacity-70"> / {c.threshold}</span></p>
+              <p className="text-xs opacity-80">{c.exceeded ? 'limit exceeded' : 'events / limit'}</p>
+            </>
+          )}
+        </div>
+      );
+    })}
+  </div>
+);
+
+const apiError = (err, fallback) => err.response?.data?.error || err.message || fallback;
+
+const waitForIceGathering = (pc, timeoutMs = 3000) =>
+  new Promise((resolve) => {
+    if (pc.iceGatheringState === 'complete') {
+      resolve();
+      return;
+    }
+    const done = () => {
+      pc.removeEventListener('icegatheringstatechange', check);
+      resolve();
+    };
+    const check = () => pc.iceGatheringState === 'complete' && done();
+    pc.addEventListener('icegatheringstatechange', check);
+    setTimeout(done, timeoutMs);
+  });
+
+const MonitorBadges = ({ monitors, audio }) => {
+  const items = [
+    ...Object.entries(monitors || {}),
+    ...Object.entries(audio?.monitors || {}),
+  ];
+  if (!items.length) return null;
+  return (
+    <div className="flex flex-wrap gap-2">
+      {items.map(([key, m]) => (
+        <div key={key} className={`badge text-xs shadow-sm ${STATE_STYLE[m.state] || STATE_STYLE.na}`} title={m.detail}>
+          <span className="font-semibold">{m.label}</span> {STATE_WORD[m.state] || m.state}
+          <span className="opacity-75 font-normal">· {m.detail}</span>
+        </div>
+      ))}
+    </div>
+  );
+};
+
+const ProctoringSession = ({ candidate, onFinished, onReset }) => {
+  const [mode, setMode] = useState('live'); // 'live' | 'recorded'
+  const [phase, setPhase] = useState('idle'); // idle | connecting | running | stopping
+  const [connectionState, setConnectionState] = useState('closed');
+  const [status, setStatus] = useState(null);
   const [alerts, setAlerts] = useState([]);
-  const [liveCounters, setLiveCounters] = useState({
-    analyzed_frames: 0,
-    head: { normal: 0, deviated: 0 },
-    gaze: { centered: 0, away: 0 },
-    passive_liveness: { live: 0, suspicious: 0, spoof: 0 },
-    anti_spoof_model: { live: 0, spoof: 0, missing: 0 }
-  });
-  const [stats, setStats] = useState({
-    total_frames: 0,
-    analyzed_frames: 0,
-    calibrated: false,
-    baseline: null,
-    passive_liveness: {
-      score: 0,
-      label: 'suspicious',
-      stats: {
-        live: 0,
-        suspicious: 0,
-        spoof: 0,
-        quality_insufficient: 0,
-        motion_static: 0,
-        motion_consistent: 0,
-        motion_unstable: 0,
-        motion_variable: 0,
-        motion_consistency_score: 0,
-        motion_label: 'unknown',
-        avg_score: 0,
-        frames_evaluated: 0
-      },
-      model: {
-        available: false,
-        path: null,
-        mode: 'none'
-      }
-    },
-    tuning: {
-      profile: 'balanced',
-      profiles_available: ['strict', 'balanced', 'lenient'],
-      debug_logging_enabled: false,
-      debug_log_format: 'jsonl',
-      debug_log_path: null
-    },
-    thresholds: {
-      passive_liveness_min_face_ratio: 0,
-      passive_liveness_min_brightness: 0,
-      passive_liveness_max_brightness: 0,
-      passive_liveness_min_blur_variance: 0,
-      passive_ear_threshold: 0,
-      passive_ear_closed_frames_min: 0,
-      passive_ear_history_size: 0,
-      passive_blink_recent_frame_window: 0,
-      passive_motion_history_size: 0,
-      passive_motion_static_std_threshold: 0,
-      passive_motion_natural_std_threshold: 0,
-      passive_motion_max_jump_threshold: 0,
-      anti_spoof_model_path: null,
-      anti_spoof_output_mode: 'auto'
-    },
-    stats: {
-      same_person: 0,
-      different_person: 0,
-      deviation: 0,
-      gaze_deviation: 0,
-      multiple_person: 0,
-      prohibited_object: 0,
-      quality_insufficient: 0,
-      motion_static: 0,
-      motion_consistent: 0,
-      motion_unstable: 0,
-      motion_variable: 0
-    }
-  });
+  const [error, setError] = useState(null);
+  const [elapsed, setElapsed] = useState(0);
+  // recorded mode
+  const [file, setFile] = useState(null);
+  const [useAudio, setUseAudio] = useState(true);
+  const [job, setJob] = useState(null);
 
-  const webcamRef = useRef(null);
-  const intervalRef = useRef(null);
-  const socketRef = useRef(null);
-  const sessionActiveRef = useRef(false);
-  const inFlightFrameRef = useRef(false);
-  const inFlightStartedAtRef = useRef(0);
-  const latestQueuedFrameRef = useRef(null);
+  const videoRef = useRef(null);
+  const pcRef = useRef(null);
+  const streamRef = useRef(null);
+  const sessionIdRef = useRef(null);
+  const timerRef = useRef(null);
+  const pollRef = useRef(null);
 
-  const clearCaptureInterval = () => {
-    if (intervalRef.current) {
-      clearInterval(intervalRef.current);
-      intervalRef.current = null;
-    }
+  const releaseMedia = () => {
+    clearInterval(timerRef.current);
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+    streamRef.current = null;
+    pcRef.current?.close();
+    pcRef.current = null;
+    if (videoRef.current) videoRef.current.srcObject = null;
   };
 
-  const resetRealtimePipeline = () => {
-    inFlightFrameRef.current = false;
-    inFlightStartedAtRef.current = 0;
-    latestQueuedFrameRef.current = null;
-  };
-
-  const countersFromStats = (statsData) => {
-    const analyzed = Math.max(0, statsData?.analyzed_frames || 0);
-    const deviation = statsData?.stats?.deviation || 0;
-    const gazeDeviation = statsData?.stats?.gaze_deviation || 0;
-    const livenessStats = statsData?.passive_liveness?.stats || {};
-
-    return {
-      analyzed_frames: analyzed,
-      head: {
-        normal: Math.max(0, analyzed - deviation),
-        deviated: deviation
-      },
-      gaze: {
-        centered: Math.max(0, analyzed - gazeDeviation),
-        away: gazeDeviation
-      },
-      passive_liveness: {
-        live: livenessStats.live || 0,
-        suspicious: livenessStats.suspicious || 0,
-        spoof: livenessStats.spoof || 0
-      },
-      anti_spoof_model: {
-        live: livenessStats.anti_spoof_model_live || 0,
-        spoof: livenessStats.anti_spoof_model_spoof || 0,
-        missing: livenessStats.anti_spoof_model_missing || 0
-      }
-    };
-  };
-
-  const analyzedFrames = Math.max(0, liveCounters?.analyzed_frames || 0);
-  const deviationFrames = liveCounters?.head?.deviated || 0;
-  const gazeDeviationFrames = liveCounters?.gaze?.away || 0;
-  const headNormalFrames = liveCounters?.head?.normal || 0;
-  const gazeCenteredFrames = liveCounters?.gaze?.centered || 0;
-  const passiveLivenessStats = liveCounters?.passive_liveness || {};
-
-  const toPercent = (value, total) => {
-    if (!total) {
-      return '0.0';
-    }
-    return ((value / total) * 100).toFixed(1);
-  };
-
-  useEffect(() => {
-    const newSocket = io(SOCKET_URL);
-    socketRef.current = newSocket;
-
-    newSocket.on('connect', () => {
-      console.log('Connected to server');
-      setConnected(true);
-    });
-
-    newSocket.on('disconnect', () => {
-      console.log('Disconnected from server');
-      setConnected(false);
-    });
-
-    newSocket.on('frame_result', (data) => {
-      handleFrameResult(data);
-    });
-
-    newSocket.on('calibration_complete', (data) => {
-      console.log('Baseline calibration completed:', data.baseline);
-    });
-
-    setSocket(newSocket);
-
-    return () => {
-      clearCaptureInterval();
-      resetRealtimePipeline();
-      socketRef.current = null;
-      newSocket.close();
-    };
+  useEffect(() => () => {
+    // leaving the screen: end any running session on the server too
+    const sid = sessionIdRef.current;
+    releaseMedia();
+    clearInterval(pollRef.current);
+    if (sid) axios.post(`/api/session/${sid}/stop`).catch(() => {});
   }, []);
 
-  useEffect(() => {
-    sessionActiveRef.current = sessionActive;
-  }, [sessionActive]);
-
-  useEffect(() => {
-    if (!sessionActive) {
-      clearCaptureInterval();
-      resetRealtimePipeline();
-    }
-  }, [sessionActive]);
-
-  const flushQueuedFrameIfAny = () => {
-    if (!sessionActiveRef.current) {
-      latestQueuedFrameRef.current = null;
+  const handleStatus = (msg) => {
+    if (msg.type === 'error') {
+      setError(msg.message);
       return;
     }
-
-    if (inFlightFrameRef.current) {
-      return;
-    }
-
-    const queuedFrame = latestQueuedFrameRef.current;
-    if (!queuedFrame || !socketRef.current?.connected) {
-      return;
-    }
-
-    latestQueuedFrameRef.current = null;
-    inFlightFrameRef.current = true;
-    inFlightStartedAtRef.current = Date.now();
-    socketRef.current.emit('process_frame', { image: queuedFrame });
+    setStatus(msg);
+    if (msg.alerts?.length) setAlerts((prev) => [...prev, ...msg.alerts].slice(-200));
   };
 
-  useEffect(() => {
-    if (!sessionActive) {
-      return undefined;
-    }
-
-    const watchdog = setInterval(() => {
-      if (!inFlightFrameRef.current) {
-        return;
-      }
-
-      const elapsedMs = Date.now() - inFlightStartedAtRef.current;
-      if (elapsedMs > 3000) {
-        inFlightFrameRef.current = false;
-        inFlightStartedAtRef.current = 0;
-        flushQueuedFrameIfAny();
-      }
-    }, 500);
-
-    return () => clearInterval(watchdog);
-  }, [sessionActive]);
-
-  const handleFrameResult = (data) => {
-    inFlightFrameRef.current = false;
-    inFlightStartedAtRef.current = 0;
-
-    if (!sessionActiveRef.current) {
-      return;
-    }
-
-    if (data.error) {
-      console.error('Frame processing error:', data.error);
-      flushQueuedFrameIfAny();
-      return;
-    }
-
-    if (data.calibrated && data.pose?.status !== 'Calibrating') {
-      setLiveCounters((prev) => {
-        const analyzed = prev.analyzed_frames + 1;
-        const headDeviated = prev.head.deviated + (data.pose?.status === 'Deviating' ? 1 : 0);
-        const gazeAway = prev.gaze.away + (data.gaze?.suspicious ? 1 : 0);
-
-        const passiveLabel = data.liveness?.passive_label;
-        const antiSpoofLabel = data.liveness?.anti_spoof_label;
-
-        return {
-          analyzed_frames: analyzed,
-          head: {
-            normal: analyzed - headDeviated,
-            deviated: headDeviated
-          },
-          gaze: {
-            centered: analyzed - gazeAway,
-            away: gazeAway
-          },
-          passive_liveness: {
-            live: prev.passive_liveness.live + (passiveLabel === 'live' ? 1 : 0),
-            suspicious: prev.passive_liveness.suspicious + (passiveLabel === 'suspicious' ? 1 : 0),
-            spoof: prev.passive_liveness.spoof + (passiveLabel === 'spoof' ? 1 : 0)
-          },
-          anti_spoof_model: {
-            live: prev.anti_spoof_model.live + (antiSpoofLabel === 'live' ? 1 : 0),
-            spoof: prev.anti_spoof_model.spoof + (antiSpoofLabel === 'spoof' ? 1 : 0),
-            missing: prev.anti_spoof_model.missing + (antiSpoofLabel === 'live' || antiSpoofLabel === 'spoof' ? 0 : 1)
-          }
-        };
-      });
-    }
-
-    if (data.no_face) {
-      flushQueuedFrameIfAny();
-      return;
-    }
-
-    setCurrentFrame(data);
-
-    if (data.identity === 'Unauthorized') {
-      addAlert('identity', 'Unauthorized person detected - identity mismatch!', `Distance: ${data.distance?.toFixed(3)}`);
-    }
-
-    if (data.pose?.status === 'Deviating') {
-      const details = `ΔY: ${data.pose.relative_yaw.toFixed(1)}°, ΔP: ${data.pose.relative_pitch.toFixed(1)}°, ΔR: ${data.pose.relative_roll.toFixed(1)}°`;
-      addAlert('pose', 'Head position deviation detected', details);
-    }
-
-    if (data.gaze?.suspicious) {
-      addAlert('gaze', `Looking away from screen - ${data.gaze.direction}`, `L: ${data.gaze.left_ratio.toFixed(2)}, R: ${data.gaze.right_ratio.toFixed(2)}`);
-    }
-
-    if (data.detection?.person_count > 1) {
-      addAlert('person', 'Multiple persons detected in frame', `Count: ${data.detection.person_count}`);
-    }
-
-    if (data.detection?.objects && Object.keys(data.detection.objects).length > 0) {
-      const objectList = Object.entries(data.detection.objects)
-        .map(([obj, count]) => `${obj} (${count})`)
-        .join(', ');
-      addAlert('object', `Prohibited objects detected: ${objectList}`);
-    }
-
-    if (data.liveness?.passive_label === 'spoof') {
-      addAlert('liveness', 'Passive liveness indicates potential spoof attempt', `Score: ${data.liveness.passive_score?.toFixed(2)}`);
-    }
-
-    if (data.liveness?.anti_spoof_label === 'spoof') {
-      addAlert(
-        'liveness',
-        'Anti-spoof model flagged a spoof attempt',
-        `Score: ${data.liveness.anti_spoof_spoof_score?.toFixed(2)}`
-      );
-    }
-
-    if (data.liveness?.quality_insufficient) {
-      addAlert(
-        'quality',
-        'Face quality is too low for reliable liveness decision',
-        data.liveness.quality_guidance || 'Improve lighting and keep your face fully visible.'
-      );
-    }
-
-    if (data.liveness?.motion_label === 'static' || data.liveness?.motion_label === 'unstable') {
-      addAlert(
-        'motion',
-        `Motion pattern looks ${data.liveness.motion_label}`,
-        `Score: ${data.liveness.motion_consistency_score?.toFixed(2)}`
-      );
-    }
-
-    flushQueuedFrameIfAny();
-  };
-
-  const addAlert = (type, message, details = null) => {
-    const alert = {
-      type,
-      message,
-      details,
-      timestamp: new Date().toISOString()
-    };
-
-    setAlerts((prev) => [...prev, alert].slice(-100));
-  };
-
-  const captureAndSendFrame = () => {
-    if (!webcamRef.current || !socketRef.current?.connected || !sessionActiveRef.current) {
-      return;
-    }
-
-    const imageSrc = webcamRef.current.getScreenshot();
-    if (!imageSrc) {
-      return;
-    }
-
-    if (inFlightFrameRef.current) {
-      latestQueuedFrameRef.current = imageSrc;
-      return;
-    }
-
-    inFlightFrameRef.current = true;
-    inFlightStartedAtRef.current = Date.now();
-    socketRef.current.emit('process_frame', { image: imageSrc });
-  };
-
-  const startSession = async () => {
-    try {
-      const response = await fetch(`${SOCKET_URL}/api/start-session`, {
-        method: 'POST'
-      });
-      const data = await response.json();
-
-      if (data.success) {
-        setSessionActive(true);
-        setAlerts([]);
-        setCurrentFrame(null);
-        setLiveCounters({
-          analyzed_frames: 0,
-          head: { normal: 0, deviated: 0 },
-          gaze: { centered: 0, away: 0 },
-          passive_liveness: { live: 0, suspicious: 0, spoof: 0 },
-          anti_spoof_model: { live: 0, spoof: 0, missing: 0 }
-        });
-        resetRealtimePipeline();
-        clearCaptureInterval();
-        fetchStats();
-        intervalRef.current = setInterval(captureAndSendFrame, 120);
-        console.log('Proctoring session started');
-      }
-    } catch (error) {
-      console.error('Failed to start session:', error);
-    }
-  };
-
-  const stopSession = async () => {
-    try {
-      const response = await fetch(`${SOCKET_URL}/api/stop-session`, {
-        method: 'POST'
-      });
-      const data = await response.json();
-
-      if (data.success) {
-        setSessionActive(false);
-        clearCaptureInterval();
-        resetRealtimePipeline();
-        console.log('Proctoring session stopped');
-      }
-    } catch (error) {
-      console.error('Failed to stop session:', error);
-      clearCaptureInterval();
-      resetRealtimePipeline();
-      setSessionActive(false);
-    }
-  };
-
-  const handleReset = async () => {
-    clearCaptureInterval();
-    resetRealtimePipeline();
+  const startLive = async () => {
+    setError(null);
     setAlerts([]);
-    setCurrentFrame(null);
-    setLiveCounters({
-      analyzed_frames: 0,
-      head: { normal: 0, deviated: 0 },
-      gaze: { centered: 0, away: 0 },
-      passive_liveness: { live: 0, suspicious: 0, spoof: 0 },
-      anti_spoof_model: { live: 0, spoof: 0, missing: 0 }
-    });
-    setSessionActive(false);
-
+    setStatus(null);
+    setPhase('connecting');
     try {
-      await fetch(`${SOCKET_URL}/api/stop-session`, {
-        method: 'POST'
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 15 } },
+        audio: true,
       });
-    } catch (error) {
-      console.error('Failed to stop session during reset:', error);
-    }
+      streamRef.current = stream;
+      if (videoRef.current) videoRef.current.srcObject = stream;
 
+      const pc = new RTCPeerConnection(); // browser and server are on the same machine: host candidates suffice
+      pcRef.current = pc;
+      stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+      const channel = pc.createDataChannel('status');
+      channel.onmessage = (ev) => handleStatus(JSON.parse(ev.data));
+      pc.onconnectionstatechange = () => {
+        setConnectionState(pc.connectionState);
+        if (pc.connectionState === 'failed') setError('The WebRTC connection to the server failed.');
+      };
+      setConnectionState('connecting');
+
+      await pc.setLocalDescription(await pc.createOffer());
+      await waitForIceGathering(pc);
+      const { data } = await axios.post('/api/webrtc/offer', {
+        candidate,
+        sdp: pc.localDescription.sdp,
+        type: pc.localDescription.type,
+      });
+      sessionIdRef.current = data.session_id;
+      await pc.setRemoteDescription({ sdp: data.sdp, type: data.type });
+
+      const started = Date.now();
+      timerRef.current = setInterval(() => setElapsed((Date.now() - started) / 1000), 500);
+      setPhase('running');
+    } catch (err) {
+      releaseMedia();
+      setPhase('idle');
+      setConnectionState('closed');
+      if (err.name === 'NotAllowedError' || err.name === 'NotFoundError') {
+        setError(`Camera/microphone not available (${err.message}). Allow access in the browser and in Windows privacy settings.`);
+      } else {
+        setError(apiError(err, 'Could not start the session'));
+      }
+    }
+  };
+
+  const stopLive = async () => {
+    const sid = sessionIdRef.current;
+    setPhase('stopping');
+    releaseMedia();
+    setConnectionState('closed');
+    try {
+      const { data } = await axios.post(`/api/session/${sid}/stop`);
+      sessionIdRef.current = null;
+      onFinished(data.report, data.report_id);
+    } catch (err) {
+      sessionIdRef.current = null;
+      setError(apiError(err, 'Could not build the report'));
+      setPhase('idle');
+    }
+  };
+
+  const startRecorded = async () => {
+    if (!file) return;
+    setError(null);
+    setJob({ status: 'uploading', progress: 0 });
+    try {
+      const form = new FormData();
+      form.append('candidate', candidate);
+      form.append('use_audio', useAudio ? 'true' : 'false');
+      form.append('video', file);
+      const { data } = await axios.post('/api/analyze-video', form, {
+        onUploadProgress: (e) => setJob({ status: 'uploading', progress: e.total ? e.loaded / e.total : 0 }),
+      });
+      pollRef.current = setInterval(async () => {
+        try {
+          const { data: j } = await axios.get(`/api/analyze-video/${data.job_id}`);
+          setJob(j);
+          if (j.status === 'done') {
+            clearInterval(pollRef.current);
+            onFinished(j.report, j.report_id);
+          } else if (j.status === 'error') {
+            clearInterval(pollRef.current);
+            setError(j.error);
+          }
+        } catch (err) {
+          clearInterval(pollRef.current);
+          setError(apiError(err, 'Lost contact with the analysis job'));
+        }
+      }, 1000);
+    } catch (err) {
+      setJob(null);
+      setError(apiError(err, 'Upload failed'));
+    }
+  };
+
+  const handleReset = () => {
+    const sid = sessionIdRef.current;
+    releaseMedia();
+    clearInterval(pollRef.current);
+    if (sid) axios.post(`/api/session/${sid}/stop`).catch(() => {});
+    sessionIdRef.current = null;
     onReset();
   };
 
-  const fetchStats = async () => {
-    try {
-      const response = await fetch(`${SOCKET_URL}/api/get-stats`);
-      const data = await response.json();
-      setStats(data);
-      setLiveCounters(countersFromStats(data));
-    } catch (error) {
-      console.error('Failed to fetch stats:', error);
-    }
-  };
+  const running = phase === 'running';
+  const calibrationText = status && !status.calibrated
+    ? `Calibrating: look at the screen (${status.calibration?.accepted ?? 0} samples)`
+    : null;
+  const totalCount = Object.values(status?.counts || {}).reduce((a, b) => a + b, 0);
 
-  useEffect(() => {
-    if (sessionActive) {
-      const statsInterval = setInterval(fetchStats, 2000);
-      return () => clearInterval(statsInterval);
-    }
-    return undefined;
-  }, [sessionActive]);
+  const fmtTime = (s) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+  const modeLocked = phase !== 'idle' || (job && job.status !== 'error');
 
   return (
-    <div className="min-h-screen p-6">
-      <div className="max-w-7xl mx-auto mb-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-3xl font-bold text-gray-900">Online Exam Proctoring</h1>
-            <p className="text-gray-600 mt-1">Real-time monitoring and violation detection</p>
-          </div>
-
-          <div className="flex items-center gap-4">
-            <StatusIndicator connected={connected} calibrated={stats.calibrated} />
-
-            {!sessionActive ? (
-              <button onClick={startSession} className="btn btn-primary">
-                <Play className="w-5 h-5 mr-2" />
-                Start Session
-              </button>
-            ) : (
-              <button onClick={stopSession} className="btn btn-danger">
-                <Pause className="w-5 h-5 mr-2" />
-                Stop Session
-              </button>
-            )}
-
-            <button onClick={handleReset} className="btn btn-secondary">
-              <RotateCcw className="w-5 h-5 mr-2" />
-              Reset
+    <div className="space-y-6">
+      <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-4">
+        <div>
+          <h1 className="page-title">Proctored test</h1>
+          <p className="text-muted mt-1">
+            Candidate <span className="font-semibold text-slate-900 dark:text-slate-100">{candidate}</span> · live video and audio monitoring
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-3">
+          {mode === 'live' && phase !== 'idle' && (
+            <StatusIndicator connectionState={connectionState} calibrated={!!status?.calibrated} calibrationText={calibrationText} />
+          )}
+          {mode === 'live' && (phase === 'idle' ? (
+            <button onClick={startLive} className="btn btn-primary">
+              <Play className="w-4 h-4" /> Start session
             </button>
-          </div>
+          ) : (
+            <button onClick={stopLive} disabled={phase !== 'running'} className="btn btn-danger">
+              {phase === 'stopping' || phase === 'connecting' ? <Loader className="w-4 h-4 animate-spin" /> : <Square className="w-4 h-4" />}
+              {phase === 'stopping' ? 'Building report...' : phase === 'connecting' ? 'Connecting...' : 'Stop session'}
+            </button>
+          ))}
+          <button onClick={handleReset} className="btn btn-secondary">
+            <RotateCcw className="w-4 h-4" /> Reset
+          </button>
         </div>
       </div>
 
-      <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 space-y-6">
-          <div className="card">
-            <div className="relative bg-gray-900 rounded-lg overflow-hidden aspect-video">
-              <Webcam
-                ref={webcamRef}
-                screenshotFormat="image/jpeg"
-                className="w-full h-full object-cover"
-                mirrored={true}
-              />
+      <div className="inline-flex gap-1 p-1 rounded-lg surface-muted" role="tablist" aria-label="Test mode">
+        {[['live', 'Live (webcam + microphone)', Video], ['recorded', 'Recorded video', Upload]].map(([key, label, Icon]) => (
+          <button
+            key={key}
+            role="tab"
+            aria-selected={mode === key}
+            onClick={() => setMode(key)}
+            disabled={modeLocked}
+            className={`tab ${mode === key ? 'tab-active' : 'tab-idle'}`}
+          >
+            <Icon className="w-4 h-4" /> {label}
+          </button>
+        ))}
+      </div>
 
-              {sessionActive && currentFrame && (
-                <div className="absolute top-4 left-4 right-4 flex flex-wrap gap-2">
-                  <div className={`badge ${
-                    currentFrame.identity === 'Authorized'
-                      ? 'badge-success'
-                      : 'badge-danger'
-                  }`}>
-                    <Shield className="w-4 h-4 inline mr-1" />
-                    {currentFrame.identity}
-                  </div>
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="lg:col-span-2 space-y-4">
+          {error && (
+            <div className="alert alert-error"><AlertCircle className="w-5 h-5 flex-shrink-0" /> <span>{error}</span></div>
+          )}
+          {(status?.warnings || []).map((w) => (
+            <div key={w} className="alert alert-warn"><AlertTriangle className="w-5 h-5 flex-shrink-0" /> <span>{WARNING_TEXT[w] || w}</span></div>
+          ))}
+          {running && status?.session_violated && (
+            <div className="alert alert-error" role="alert">
+              <Ban className="w-5 h-5 flex-shrink-0" />
+              <span><span className="font-semibold">Session marked as violated.</span> A violation limit was exceeded; its evidence will be
+                uploaded with the session report.</span>
+            </div>
+          )}
 
-                  {currentFrame.calibrated ? (
-                    <>
-                      <div className={`badge ${
-                        currentFrame.pose.status === 'Normal'
-                          ? 'badge-success'
-                          : currentFrame.pose.status === 'Deviating'
-                          ? 'badge-danger'
-                          : 'badge-info'
-                      }`}>
-                        <Activity className="w-4 h-4 inline mr-1" />
-                        {currentFrame.pose.status}
-                      </div>
-
-                      <div className={`badge ${
-                        !currentFrame.gaze.suspicious
-                          ? 'badge-success'
-                          : 'badge-warning'
-                      }`}>
-                        <Eye className="w-4 h-4 inline mr-1" />
-                        {currentFrame.gaze.direction}
-                      </div>
-
-                      <div className={`badge ${
-                        currentFrame.detection.person_count === 1
-                          ? 'badge-success'
-                          : 'badge-danger'
-                      }`}>
-                        <Users className="w-4 h-4 inline mr-1" />
-                        {currentFrame.detection.person_count} Person(s)
-                      </div>
-
-                      {currentFrame.liveness && (
-                        <div className={`badge ${
-                          currentFrame.liveness.passive_label === 'live'
-                            ? 'badge-success'
-                            : currentFrame.liveness.passive_label === 'spoof'
-                            ? 'badge-danger'
-                            : 'badge-warning'
-                        }`}>
-                          Passive Liveness: {currentFrame.liveness.passive_label} ({currentFrame.liveness.passive_score?.toFixed(2)})
-                        </div>
-                      )}
-
-                      {currentFrame.liveness?.anti_spoof_label && (
-                        <div className={`badge ${
-                          currentFrame.liveness.anti_spoof_label === 'live'
-                            ? 'badge-success'
-                            : currentFrame.liveness.anti_spoof_label === 'spoof'
-                            ? 'badge-danger'
-                            : 'badge-warning'
-                        }`}>
-                          Anti-Spoof: {currentFrame.liveness.anti_spoof_label}
-                        </div>
-                      )}
-                      <div className="w-full grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-2 mt-2">
-                        <div className="bg-black/65 text-white rounded-lg px-3 py-2 text-xs border border-white/20">
-                          <div className="font-semibold text-orange-200">Head Pose</div>
-                          <div className="mt-1 font-mono">Normal: {headNormalFrames}</div>
-                          <div className="font-mono text-orange-100">Deviated: {deviationFrames} ({toPercent(deviationFrames, analyzedFrames)}%)</div>
-                        </div>
-
-                        <div className="bg-black/65 text-white rounded-lg px-3 py-2 text-xs border border-white/20">
-                          <div className="font-semibold text-blue-200">Eye Gaze</div>
-                          <div className="mt-1 font-mono">Centered: {gazeCenteredFrames}</div>
-                          <div className="font-mono text-blue-100">Away: {gazeDeviationFrames} ({toPercent(gazeDeviationFrames, analyzedFrames)}%)</div>
-                        </div>
-
-                        <div className="bg-black/65 text-white rounded-lg px-3 py-2 text-xs border border-white/20">
-                          <div className="font-semibold text-amber-200">Passive Liveness</div>
-                          <div className="mt-1 font-mono">Live: {passiveLivenessStats.live || 0}</div>
-                          <div className="font-mono">Suspicious: {passiveLivenessStats.suspicious || 0}</div>
-                          <div className="font-mono text-red-200">Spoof: {passiveLivenessStats.spoof || 0}</div>
-                        </div>
-
-                        <div className="bg-black/65 text-white rounded-lg px-3 py-2 text-xs border border-white/20">
-                          <div className="font-semibold text-emerald-200">Anti-Spoof Model</div>
-                          <div className="mt-1 font-mono">Live: {liveCounters.anti_spoof_model.live || 0}</div>
-                          <div className="font-mono text-red-200">Spoof: {liveCounters.anti_spoof_model.spoof || 0}</div>
-                          <div className="font-mono text-yellow-200">Missing: {liveCounters.anti_spoof_model.missing || 0}</div>
-                        </div>
-                      </div>
-                    </>
-                  ) : (
-                    <div className="badge badge-info animate-pulse">
-                      Calibrating: {currentFrame.calibration_progress}/3
+          {mode === 'live' ? (
+            <div className="card space-y-4">
+              <div className="relative bg-slate-900 rounded-lg overflow-hidden aspect-video ring-1 ring-slate-200 dark:ring-slate-800">
+                <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" style={{ transform: 'scaleX(-1)' }} />
+                {phase === 'idle' && (
+                  <div className="absolute inset-0 flex items-center justify-center bg-slate-950/70">
+                    <div className="text-center text-white px-6">
+                      <Video className="w-14 h-14 mx-auto mb-3 opacity-70" />
+                      <p className="text-lg font-medium">Session not active</p>
+                      <p className="text-sm opacity-75 mt-1">Click "Start session". Look at the screen for the first few seconds while the system calibrates.</p>
                     </div>
-                  )}
+                  </div>
+                )}
+                {running && (
+                  <span className="absolute bottom-3 left-3 badge bg-red-600 text-white text-xs">
+                    <span className="w-2 h-2 rounded-full bg-white animate-pulse" /> LIVE {fmtTime(elapsed)}
+                  </span>
+                )}
+                {running && status && (
+                  <div className="absolute top-3 left-3 right-3">
+                    <MonitorBadges monitors={status.monitors} audio={status.audio} />
+                  </div>
+                )}
+              </div>
+              {running && (
+                <div className="grid grid-cols-3 gap-3 text-center">
+                  <div className="stat stat-blue">
+                    <p className="stat-label inline-flex items-center gap-1"><Clock className="w-4 h-4" /> Elapsed</p>
+                    <p className="stat-value">{fmtTime(elapsed)}</p>
+                  </div>
+                  <div className="stat stat-purple">
+                    <p className="stat-label inline-flex items-center gap-1"><Activity className="w-4 h-4" /> Samples</p>
+                    <p className="stat-value">{status?.samples ?? 0}</p>
+                    <p className="text-xs opacity-80">{status?.sample_rate_hz ? `${status.sample_rate_hz}/s` : ''}</p>
+                  </div>
+                  <div className="stat stat-red">
+                    <p className="stat-label inline-flex items-center gap-1"><AlertTriangle className="w-4 h-4" /> Violations</p>
+                    <p className="stat-value">{totalCount}</p>
+                  </div>
                 </div>
               )}
-
-              {!sessionActive && (
-                <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-50">
-                  <div className="text-center text-white">
-                    <Play className="w-16 h-16 mx-auto mb-4 opacity-70" />
-                    <p className="text-lg font-medium">Session Not Active</p>
-                    <p className="text-sm opacity-75">Click "Start Session" to begin</p>
-                  </div>
+              {running && (
+                <div>
+                  <p className="text-sm font-medium text-muted mb-2">Evidence counters (events / limit)</p>
+                  <EvidenceCounters evidence={status?.evidence} />
                 </div>
               )}
             </div>
-          </div>
-
-          <Statistics stats={stats} currentFrame={currentFrame} />
+          ) : (
+            <div className="card space-y-5">
+              <div>
+                <h2 className="card-title">Analyse a recorded exam video</h2>
+                <p className="text-sm text-muted mt-1">The video (and optionally its audio track) is analysed on this computer with the same checks as a live session.</p>
+              </div>
+              <label className={`flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed p-8 text-center transition-colors cursor-pointer
+                border-slate-300 hover:border-primary-500 dark:border-slate-700 dark:hover:border-primary-400 ${modeLocked ? 'pointer-events-none opacity-60' : ''}`}>
+                <FileVideo className="w-10 h-10 text-slate-400" />
+                <span className="font-medium">{file ? file.name : 'Choose a video file'}</span>
+                <span className="text-xs text-subtle">{file ? `${(file.size / 1024 / 1024).toFixed(1)} MB` : 'MP4, WebM, AVI, MOV...'}</span>
+                <input type="file" accept="video/*" className="hidden" onChange={(e) => setFile(e.target.files[0] || null)} disabled={!!job && job.status !== 'error'} />
+              </label>
+              <label className="flex items-center gap-2 text-sm cursor-pointer">
+                <input type="checkbox" className="checkbox" checked={useAudio} onChange={(e) => setUseAudio(e.target.checked)} />
+                Also analyse the video's audio track
+              </label>
+              <button onClick={startRecorded} disabled={!file || (job && job.status !== 'error')} className="btn btn-primary">
+                <Upload className="w-4 h-4" /> Analyse
+              </button>
+              {job && job.status !== 'error' && (
+                <div>
+                  <div className="flex justify-between text-sm text-muted mb-1">
+                    <span>{job.status === 'uploading' ? 'Uploading...' : `Analysing ${job.t ?? 0} / ${job.duration ?? '?'} s`}</span>
+                    <span className="font-mono">{Math.round(100 * (job.progress || 0))}%</span>
+                  </div>
+                  <div className="h-2 rounded-full bg-slate-200 dark:bg-slate-800 overflow-hidden">
+                    <div className="h-2 bg-primary-600 rounded-full transition-all" style={{ width: `${100 * (job.progress || 0)}%` }} />
+                  </div>
+                  {job.monitors && <div className="mt-4"><MonitorBadges monitors={job.monitors} /></div>}
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         <div className="lg:col-span-1">

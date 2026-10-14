@@ -1,0 +1,14 @@
+﻿  [ok] enrollment renders
+  [ok] consent required warning
+  [ok] consent notice in sidebar
+  [ok] enrollment with consent renders
+  [ok] passage shown
+  [ok] record button
+  [ok] test page renders
+  [ok] asks for enrollment first
+  [ok] results page renders
+  [ok] verdict box shows INVALID
+  [ok] score metric
+  [ok] charts present (bar + timeline)
+  [ok] download button
+U1 UI: PASS

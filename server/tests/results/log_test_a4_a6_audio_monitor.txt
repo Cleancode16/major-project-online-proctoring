@@ -1,0 +1,17 @@
+silence            | events []
+candidate_speech  SPEEC:(10, 0, 0) | chunk sims 0.85..0.93 | events [('SPEECH_DETECTED', 3.12, 6.0), ('SPEECH_DETECTED', 12.24, 15.6)]
+other_speaker     SPEEC:(10, 0, 0) VOICE:(10, 0, 0) | chunk sims 0.43..0.52 | events [('SPEECH_DETECTED', 3.12, 6.0), ('VOICE_MISMATCH', 3.12, 6.0), ('SPEECH_DETECTED', 12.24, 15.6), ('VOICE_MISMATCH', 12.24, 15.6)]
+dialogue          SPEEC:(45, 0, 0) VOICE:(20, 0, 2) MULTI:(43, 0, 2) | chunk sims 0.44..0.94 | events [('SPEECH_DETECTED', 2.16, 6.0), ('MULTIPLE_SPEAKERS', 2.64, 6.0), ('SPEECH_DETECTED', 6.96, 10.8), ('VOICE_MISMATCH', 6.96, 10.8)]...
+music             SUSPI:(28, 0, 2) | events [('SUSPICIOUS_SOUND', 1.68, 16.08)]
+phone_ring        SUSPI:(18, 0, 0) | events [('SUSPICIOUS_SOUND', 4.56, 14.16)]
+typing             | events []
+whisper           SPEEC:(12, 0, 1) WHISP:(13, 0, 0) | chunk sims 0.73..0.83 | events [('SPEECH_DETECTED', 3.12, 6.0), ('WHISPERING', 3.12, 10.32), ('SPEECH_DETECTED', 6.48, 10.32)]
+Window-level totals over all scenes (TP, FP, FN):
+  SPEECH_DETECTED    TP  77 FP   0 FN   1  precision 1.0  recall 0.987
+  VOICE_MISMATCH     TP  30 FP   0 FN   2  precision 1.0  recall 0.938
+  MULTIPLE_SPEAKERS  TP  43 FP   0 FN   2  precision 1.0  recall 0.956
+  WHISPERING         TP  13 FP   0 FN   0  precision 1.0  recall 1.0
+  SUSPICIOUS_SOUND   TP  46 FP   0 FN   2  precision 1.0  recall 0.958
+live vs offline (dialogue): same events=True, max YAMNet category diff 0.0030; live_status keys ['categories', 'speech_prob', 't', 'top']
+event schema fields present: True
+A4-A6 AUDIO MONITOR: PASS

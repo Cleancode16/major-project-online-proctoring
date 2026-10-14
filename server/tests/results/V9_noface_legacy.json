@@ -1,0 +1,73 @@
+{
+  "profile": "legacy",
+  "overrides": {},
+  "n_samples": 29,
+  "wall_s_incl_model_load": 8.0,
+  "median_ms_per_sample_after_warmup": {
+    "face": 57.8,
+    "mesh_pose_gaze": 6.5,
+    "yolo": 48.8,
+    "total": 112.2
+  },
+  "baseline": {
+    "yaw": 10.710728557019584,
+    "pitch": -167.81128829657365,
+    "roll": 2.1658340466944686,
+    "gaze_h": 0.0001453280152289201,
+    "gaze_v": null,
+    "n_samples": 3,
+    "n_seen": 3,
+    "t_end": 0.6714789323484975,
+    "fallback": false
+  },
+  "scores": {
+    "IDENTITY_MISMATCH": {
+      "TP": 0,
+      "FP": 0,
+      "FN": 0,
+      "TN": 29,
+      "precision": null,
+      "recall": null
+    },
+    "HEAD_POSE_DEVIATION": {
+      "TP": 2,
+      "FP": 0,
+      "FN": 0,
+      "TN": 25,
+      "precision": 1.0,
+      "recall": 1.0
+    },
+    "GAZE_AWAY": {
+      "TP": 0,
+      "FP": 29,
+      "FN": 0,
+      "TN": 0,
+      "precision": 0.0,
+      "recall": null
+    },
+    "MULTIPLE_PERSONS": {
+      "TP": 3,
+      "FP": 0,
+      "FN": 1,
+      "TN": 24,
+      "precision": 1.0,
+      "recall": 0.75
+    },
+    "PROHIBITED_OBJECT": {
+      "TP": 11,
+      "FP": 0,
+      "FN": 1,
+      "TN": 16,
+      "precision": 1.0,
+      "recall": 0.917
+    },
+    "FACE_NOT_VISIBLE": {
+      "TP": 0,
+      "FP": 0,
+      "FN": 0,
+      "TN": 29,
+      "precision": null,
+      "recall": null
+    }
+  }
+}

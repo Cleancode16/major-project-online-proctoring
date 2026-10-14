@@ -1,0 +1,22 @@
+﻿
+2026-10-14 18:33:29.240 WARNING streamlit.runtime.scriptrunner_utils.script_run_context: Thread 'MainThread': missing 
+ScriptRunContext! This warning can be ignored when running in bare mode.
+2026-10-14 18:33:29.241 WARNING streamlit.runtime.scriptrunner_utils.script_run_context: Thread 'MainThread': missing 
+ScriptRunContext! This warning can be ignored when running in bare mode.
+2026-10-14 18:33:29.241 WARNING streamlit.runtime.scriptrunner_utils.script_run_context: Thread 'MainThread': missing 
+ScriptRunContext! This warning can be ignored when running in bare mode.
+2026-10-14 18:33:29.241 WARNING streamlit.runtime.scriptrunner_utils.script_run_context: Thread 'MainThread': missing 
+ScriptRunContext! This warning can be ignored when running in bare mode.
+live run finished after 72 s; page now Results
+errors: []
+warnings: ['**SUSPICIOUS** — Weighted violation score 20.0 >= 20.0', 'Head-pose/gaze baseline was not calibrated: pose 
+and gaze were not evaluated.', 'AUDIO_SOURCE_SILENT: the audio is silent (muted or blocked microphone).']
+report: verdict SUSPICIOUS (Weighted violation score 20.0 >= 20.0); video 41 samples over 61.0 s; audio 
+digital_silence; events 2
+warnings in report: ['Head-pose/gaze baseline was not calibrated: pose and gaze were not evaluated.', 
+'AUDIO_SOURCE_SILENT: the audio is silent (muted or blocked microphone).']
+achieved sample rate 0.67/s, time per stage {'read': 41.0, 'audio': 8.9, 'process': 5.5, 'render': 0.3}, 
+camera_black=False
+U1 LIVE DEVICES: PASS
+
+

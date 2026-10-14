@@ -1,0 +1,6 @@
+﻿
+achieved sample rate 0.69/s, time per stage {'read': 42.0, 'audio': 8.0, 'process': 5.2, 'render': 0.3}, 
+camera_black=False
+U1 LIVE DEVICES: PASS
+
+

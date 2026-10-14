@@ -1,0 +1,146 @@
+{
+  "v1_first_nomargin": {
+    "train_best_threshold": 0.44110000133514404,
+    "train_acc": 0.9795454545454545,
+    "test_at_train_threshold": {
+      "acc": 0.97,
+      "FRR": 0.05,
+      "FAR": 0.01,
+      "TP": 475,
+      "FN": 25,
+      "FP": 5,
+      "TN": 495
+    },
+    "test_at_cos0.5_(v1_rule)": {
+      "acc": 0.967,
+      "FRR": 0.062,
+      "FAR": 0.004,
+      "TP": 469,
+      "FN": 31,
+      "FP": 2,
+      "TN": 498
+    },
+    "threshold_far1pct_train": 0.4130881428718567,
+    "test_at_far1pct_threshold": {
+      "acc": 0.971,
+      "FRR": 0.04,
+      "FAR": 0.018,
+      "TP": 480,
+      "FN": 20,
+      "FP": 9,
+      "TN": 491
+    },
+    "test_auc": 0.9881439999999998,
+    "no_face_fallbacks": 172,
+    "same_mean": 0.7334679961204529,
+    "diff_mean": 0.0352284237742424
+  },
+  "v2_largest_m0.00": {
+    "train_best_threshold": 0.44110000133514404,
+    "train_acc": 0.9890909090909091,
+    "test_at_train_threshold": {
+      "acc": 0.979,
+      "FRR": 0.032,
+      "FAR": 0.01,
+      "TP": 484,
+      "FN": 16,
+      "FP": 5,
+      "TN": 495
+    },
+    "test_at_cos0.5_(v1_rule)": {
+      "acc": 0.976,
+      "FRR": 0.044,
+      "FAR": 0.004,
+      "TP": 478,
+      "FN": 22,
+      "FP": 2,
+      "TN": 498
+    },
+    "threshold_far1pct_train": 0.4151860475540161,
+    "test_at_far1pct_threshold": {
+      "acc": 0.979,
+      "FRR": 0.026,
+      "FAR": 0.016,
+      "TP": 487,
+      "FN": 13,
+      "FP": 8,
+      "TN": 492
+    },
+    "test_auc": 0.995972,
+    "no_face_fallbacks": 151,
+    "same_mean": 0.7454538345336914,
+    "diff_mean": 0.03436431661248207
+  },
+  "v2_largest_m0.15": {
+    "train_best_threshold": 0.43209999799728394,
+    "train_acc": 0.9922727272727273,
+    "test_at_train_threshold": {
+      "acc": 0.984,
+      "FRR": 0.016,
+      "FAR": 0.016,
+      "TP": 492,
+      "FN": 8,
+      "FP": 8,
+      "TN": 492
+    },
+    "test_at_cos0.5_(v1_rule)": {
+      "acc": 0.986,
+      "FRR": 0.024,
+      "FAR": 0.004,
+      "TP": 488,
+      "FN": 12,
+      "FP": 2,
+      "TN": 498
+    },
+    "threshold_far1pct_train": 0.42628318071365356,
+    "test_at_far1pct_threshold": {
+      "acc": 0.983,
+      "FRR": 0.016,
+      "FAR": 0.018,
+      "TP": 492,
+      "FN": 8,
+      "FP": 9,
+      "TN": 491
+    },
+    "test_auc": 0.99614,
+    "no_face_fallbacks": 151,
+    "same_mean": 0.7678883075714111,
+    "diff_mean": 0.03424897417426109
+  },
+  "v2_largest_m0.30": {
+    "train_best_threshold": 0.41499999165534973,
+    "train_acc": 0.9886363636363636,
+    "test_at_train_threshold": {
+      "acc": 0.987,
+      "FRR": 0.014,
+      "FAR": 0.012,
+      "TP": 493,
+      "FN": 7,
+      "FP": 6,
+      "TN": 494
+    },
+    "test_at_cos0.5_(v1_rule)": {
+      "acc": 0.983,
+      "FRR": 0.03,
+      "FAR": 0.004,
+      "TP": 485,
+      "FN": 15,
+      "FP": 2,
+      "TN": 498
+    },
+    "threshold_far1pct_train": 0.4128066897392273,
+    "test_at_far1pct_threshold": {
+      "acc": 0.987,
+      "FRR": 0.014,
+      "FAR": 0.012,
+      "TP": 493,
+      "FN": 7,
+      "FP": 6,
+      "TN": 494
+    },
+    "test_auc": 0.9962159999999999,
+    "no_face_fallbacks": 151,
+    "same_mean": 0.7583122849464417,
+    "diff_mean": 0.038661226630210876
+  }
+}

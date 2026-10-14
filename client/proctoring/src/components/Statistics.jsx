@@ -1,419 +1,506 @@
-import { TrendingUp, AlertTriangle, Eye, Users, Package } from 'lucide-react';
+import { useState } from 'react';
+import {
+  ShieldCheck, Flag, Ban, Download, RotateCcw, Play, AlertTriangle, TrendingUp, Clock, Mic, ListChecks,
+  Image as ImageIcon, Table2, GanttChartSquare, Smartphone, Users, MoveHorizontal, UploadCloud, FileText, Gauge,
+} from 'lucide-react';
 
-const Statistics = ({ stats, currentFrame }) => {
-  const getPercentage = (value, total) => {
-    if (total === 0) return 0;
-    return ((value / total) * 100).toFixed(1);
+// Results report (flow.txt PART II-D, D.3). Input: the report JSON built by server/aggregation/report.py.
+// Series colours: CSS variables --series-video / --series-audio (index.css), light/dark steps of the
+// reference palette slots 1-2. Chart text and grid lines follow the theme.
+const SOURCE_VAR = { video: 'var(--series-video)', audio: 'var(--series-audio)' };
+const VERDICT = {
+  VALID: { cls: 'border-green-300 bg-green-50 text-green-900 dark:border-green-800 dark:bg-green-950/40 dark:text-green-100', Icon: ShieldCheck },
+  SUSPICIOUS: { cls: 'border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100', Icon: Flag },
+  INVALID: { cls: 'border-red-300 bg-red-50 text-red-900 dark:border-red-800 dark:bg-red-950/40 dark:text-red-100', Icon: Ban },
+};
+const nice = (t) => t.toLowerCase().replace(/_/g, ' ');
+
+const Legend = () => (
+  <div className="flex gap-4 text-xs text-muted mb-2">
+    {Object.entries(SOURCE_VAR).map(([k, c]) => (
+      <span key={k} className="flex items-center gap-1.5">
+        <span className="inline-block w-3 h-3 rounded-sm" style={{ background: c }} /> {k}
+      </span>
+    ))}
+  </div>
+);
+
+const Tooltip = ({ tip }) =>
+  tip ? (
+    <div
+      className="pointer-events-none fixed z-50 rounded-md px-2 py-1 text-xs shadow-lg whitespace-pre
+        bg-slate-900 text-white ring-1 ring-slate-700 dark:bg-slate-100 dark:text-slate-900 dark:ring-slate-300"
+      style={{ left: tip.x + 12, top: tip.y + 12 }}
+    >
+      {tip.text}
+    </div>
+  ) : null;
+
+const PercentBars = ({ rows }) => {
+  const [tip, setTip] = useState(null);
+  const max = Math.max(10, ...rows.map((r) => r.percentage)) * 1.1;
+  const rowH = 26;
+  const labelW = 170;
+  const width = 640;
+  const plotW = width - labelW - 60;
+  return (
+    <div className="overflow-x-auto">
+      <Legend />
+      <svg viewBox={`0 0 ${width} ${rows.length * rowH + 24}`} className="w-full min-w-[480px]" role="img" aria-label="Violation percentage by type">
+        {[0, 0.25, 0.5, 0.75, 1].map((f) => (
+          <g key={f}>
+            <line x1={labelW + f * plotW} x2={labelW + f * plotW} y1={0} y2={rows.length * rowH} className="chart-grid" />
+            <text x={labelW + f * plotW} y={rows.length * rowH + 16} fontSize="10" className="chart-text" textAnchor="middle">
+              {(f * max).toFixed(0)}%
+            </text>
+          </g>
+        ))}
+        {rows.map((r, i) => {
+          const w = Math.max(2, (r.percentage / max) * plotW);
+          const y = i * rowH + 5;
+          return (
+            <g
+              key={r.type}
+              onMouseMove={(e) => setTip({ x: e.clientX, y: e.clientY, text:
+                `${r.type}\n${r.percentage.toFixed(1)}% = ${r.numerator} / ${r.denominator} ${r.unit}\n` +
+                `${r.duration_s.toFixed(1)} s, ${r.count} event(s)${r.critical ? ', critical' : ''}` })}
+              onMouseLeave={() => setTip(null)}
+            >
+              <rect x={0} y={y - 4} width={width} height={rowH} fill="transparent" />
+              <text x={labelW - 8} y={y + 12} fontSize="11" className="chart-text" textAnchor="end">{nice(r.type)}</text>
+              <rect x={labelW} y={y + 2} width={w} height={14} rx={4} style={{ fill: SOURCE_VAR[r.source] }} />
+              <text x={labelW + w + 6} y={y + 13} fontSize="11" className="chart-text-strong">{r.percentage.toFixed(1)}%</text>
+            </g>
+          );
+        })}
+      </svg>
+      <Tooltip tip={tip} />
+    </div>
+  );
+};
+
+const Timeline = ({ events, duration }) => {
+  const [tip, setTip] = useState(null);
+  const types = [...new Set(events.map((e) => e.type))];
+  const end = Math.max(duration || 0, ...events.map((e) => e.end_s), 1);
+  const rowH = 24;
+  const labelW = 170;
+  const width = 640;
+  const plotW = width - labelW - 20;
+  const x = (t) => labelW + (t / end) * plotW;
+  const ticks = [0, 0.25, 0.5, 0.75, 1].map((f) => f * end);
+  return (
+    <div className="overflow-x-auto">
+      <Legend />
+      <svg viewBox={`0 0 ${width} ${types.length * rowH + 24}`} className="w-full min-w-[480px]" role="img" aria-label="Violation timeline">
+        {ticks.map((t) => (
+          <g key={t}>
+            <line x1={x(t)} x2={x(t)} y1={0} y2={types.length * rowH} className="chart-grid" />
+            <text x={x(t)} y={types.length * rowH + 16} fontSize="10" className="chart-text" textAnchor="middle">{t.toFixed(0)} s</text>
+          </g>
+        ))}
+        {types.map((t, i) => (
+          <text key={t} x={labelW - 8} y={i * rowH + 16} fontSize="11" className="chart-text" textAnchor="end">{nice(t)}</text>
+        ))}
+        {events.map((e, k) => {
+          const row = types.indexOf(e.type);
+          const w = Math.max(3, x(Math.max(e.end_s, e.start_s + 0.2)) - x(e.start_s));
+          return (
+            <rect
+              key={k}
+              x={x(e.start_s)}
+              y={row * rowH + 5}
+              width={w}
+              height={14}
+              rx={3}
+              style={{ fill: SOURCE_VAR[e.source] }}
+              className="chart-gap"
+              strokeWidth="1"
+              onMouseMove={(ev) => setTip({ x: ev.clientX, y: ev.clientY, text:
+                `${e.type} (${e.source})\n${e.start_s.toFixed(2)} - ${e.end_s.toFixed(2)} s (${e.duration_s.toFixed(2)} s)` +
+                (e.details && Object.keys(e.details).length ? `\n${JSON.stringify(e.details)}` : '') })}
+              onMouseLeave={() => setTip(null)}
+            />
+          );
+        })}
+      </svg>
+      <Tooltip tip={tip} />
+    </div>
+  );
+};
+
+// Evidence groups (flow.txt §C.5): voice clips, object / multiple-face / head-pose snapshots, each sorted by time
+const EVIDENCE_ORDER = ['voice', 'object', 'multiple_faces', 'head_pose'];
+const GROUP_META = {
+  voice: { label: 'Voice violations', Icon: Mic },
+  object: { label: 'Prohibited objects', Icon: Smartphone },
+  multiple_faces: { label: 'Multiple faces', Icon: Users },
+  head_pose: { label: 'Head pose movement', Icon: MoveHorizontal },
+};
+const fmtT = (s) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${(s % 60).toFixed(1).padStart(4, '0')}`;
+
+const itemDetails = (group, it) => {
+  switch (group) {
+    case 'object':
+      return (it.objects || []).map((o) => `${o.label} ${(100 * o.confidence).toFixed(0)}%`).join(', ') || 'object';
+    case 'multiple_faces':
+      return `${it.face_count ?? '?'} face(s), ${it.person_count ?? '?'} person(s) (max ${it.max_persons ?? '?'})`;
+    case 'head_pose': {
+      const a = it.angles_deg || {};
+      const lim = it.allowed_deg || {};
+      return `yaw ${a.yaw ?? '-'}°, pitch ${a.pitch ?? '-'}°, roll ${a.roll ?? '-'}° (limits ${lim.yaw}/${lim.pitch}/${lim.roll}°) · ` +
+        `${it.duration_s.toFixed(1)} s (allowed ${it.allowed_duration_s} s)`;
+    }
+    case 'voice':
+      return [(it.types || [it.type]).map(nice).join(' + '),
+        it.speaker_similarity_min != null ? `voice similarity ${it.speaker_similarity_min.toFixed(2)} (threshold ${it.speaker_threshold})` : null,
+        it.speech_s_in_event != null ? `speech ${it.speech_s_in_event.toFixed(1)} s` : null].filter(Boolean).join(' · ');
+    default:
+      return '';
+  }
+};
+
+const UploadBadge = ({ upload }) => {
+  if (!upload) return null;
+  const style = { uploaded: 'badge-success', failed: 'badge-danger', skipped: 'badge-muted' }[upload.status] || 'badge-muted';
+  return (
+    <span className={`badge text-xs ${style}`} title={upload.error || upload.target || upload.reason || ''}>
+      <UploadCloud className="w-3.5 h-3.5" /> {upload.status}
+    </span>
+  );
+};
+
+// evidence counter text (LIM2: % of session vs limit; reports before LIM2 only have count / threshold)
+const counterText = (c) => (c.percentage != null
+  ? `${c.count} event(s) · ${c.percentage.toFixed(1)}% of session / limit ${c.limit_text}`
+  : `${c.count} / limit ${c.threshold}`);
+
+// SC2 scoring: severity badge colours
+const SEVERITY_BADGE = { critical: 'badge-danger', medium: 'badge-warning', low: 'badge-info', 'very low': 'badge-muted' };
+
+const ScoringCard = ({ verdict, rows }) => (
+  <section className="card space-y-4">
+    <SectionTitle Icon={Gauge}>Scoring</SectionTitle>
+    <p className="text-sm">
+      <span className="font-semibold">Overall score {verdict.score.toFixed(1)} / 100 ({verdict.label}).</span>{' '}
+      <span className="text-muted">{verdict.score_explanation}</span>
+    </p>
+    <ul className="space-y-3">
+      {rows.map((r) => (
+        <li key={r.type} className="space-y-1">
+          <div className="flex flex-wrap items-center gap-2 justify-between">
+            <span className="font-medium capitalize inline-flex items-center gap-2">
+              {nice(r.type)}
+              <span className={`badge text-xs px-2 py-0.5 ${SEVERITY_BADGE[r.severity] || 'badge-muted'}`}>{r.severity}</span>
+            </span>
+            <span className="font-mono text-sm">{r.score != null ? r.score.toFixed(1) : '-'} / {r.max_points}</span>
+          </div>
+          <div className="h-2 rounded-full bg-slate-200 dark:bg-slate-800 overflow-hidden" aria-hidden="true">
+            <div className="h-full rounded-full" style={{
+              width: `${r.max_points ? (100 * (r.score || 0)) / r.max_points : 0}%`,
+              background: r.critical ? 'rgb(220 38 38)' : SOURCE_VAR[r.source],
+            }} />
+          </div>
+          <p className="text-xs text-muted">{r.score_explanation}</p>
+        </li>
+      ))}
+    </ul>
+  </section>
+);
+
+const EvidenceGroup = ({ group, data, counter, upload, reportId }) => {
+  const { label, Icon } = GROUP_META[group];
+  const items = data?.items || [];
+  const fileUrl = (f) => `/api/reports/${reportId}/files/${f}`;
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-2 justify-between">
+        <h3 className="font-semibold inline-flex items-center gap-2"><Icon className="w-4 h-4" /> {label}</h3>
+        <div className="flex items-center gap-2">
+          {counter && (
+            <span className={`badge text-xs ${counter.exceeded ? 'badge-danger' : 'badge-muted'}`}>
+              {counterText(counter)}{counter.exceeded ? ' · exceeded' : ''}
+            </span>
+          )}
+          <UploadBadge upload={upload} />
+        </div>
+      </div>
+      {upload?.status === 'failed' && (
+        <div className="alert alert-error text-xs"><AlertTriangle className="w-4 h-4 flex-shrink-0" /> Upload failed: {upload.error}</div>
+      )}
+      {items.length === 0 ? (
+        <p className="text-sm text-subtle">No events.</p>
+      ) : group === 'voice' ? (
+        <ul className="space-y-2">
+          {items.map((it) => (
+            <li key={it.id} className="surface-muted rounded-lg p-3 flex flex-col md:flex-row md:items-center gap-3">
+              <div className="md:w-64 flex-shrink-0">
+                <p className="text-sm font-medium">{fmtT(it.start_s)} – {fmtT(it.end_s)}</p>
+                <p className="text-xs text-muted">{itemDetails(group, it)}</p>
+              </div>
+              {it.file && reportId
+                ? <audio controls preload="none" src={fileUrl(it.file)} className="w-full md:flex-1" />
+                : <span className="text-xs text-subtle">{it.note || 'no clip'}</span>}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          {items.map((it) => (
+            <figure key={it.id} className="rounded-lg overflow-hidden ring-1 ring-slate-200 dark:ring-slate-800">
+              {it.file && reportId ? (
+                <a href={fileUrl(it.file)} target="_blank" rel="noreferrer">
+                  <img src={fileUrl(it.file)} alt={`${label} at ${fmtT(it.start_s)}`} className="w-full" loading="lazy" />
+                </a>
+              ) : (
+                <div className="aspect-video flex items-center justify-center text-xs text-subtle surface-muted">{it.note || 'no image'}</div>
+              )}
+              <figcaption className="text-xs px-2 py-1.5 surface-muted space-y-0.5">
+                <p className="font-medium">{fmtT(it.start_s)} – {fmtT(it.end_s)} ({it.duration_s.toFixed(1)} s)</p>
+                <p className="text-muted">{itemDetails(group, it)}</p>
+              </figcaption>
+            </figure>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
+const SectionTitle = ({ Icon, children }) => (
+  <h2 className="card-title flex items-center gap-2 mb-4">
+    <Icon className="w-5 h-5 text-primary-600 dark:text-primary-400" /> {children}
+  </h2>
+);
+
+const Statistics = ({ report, reportId, onNewSession, onReset }) => {
+  const v = report.verdict;
+  const { cls, Icon } = VERDICT[v.label] || VERDICT.SUSPICIOUS;
+  const video = report.video || {};
+  const audio = report.audio || {};
+  const rows = Object.entries(report.per_violation)
+    .map(([type, s]) => ({ type, ...s }))
+    .filter((r) => r.measurable)
+    .sort((a, b) => b.percentage - a.percentage);
+  const allRows = Object.entries(report.per_violation).map(([type, s]) => ({ type, ...s }));
+  const scoreRows = allRows.filter((r) => r.max_points != null)
+    .sort((a, b) => (b.score || 0) - (a.score || 0) || b.max_points - a.max_points);
+  const audioEvents = report.timeline.filter((e) => e.source === 'audio');
+
+  const [busy, setBusy] = useState(null);         // 'pdf' | 'docx' while the server builds the file
+  const [dlError, setDlError] = useState(null);
+
+  const saveBlob = (blob, name) => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   };
 
-  const getStatusClass = (percentage, threshold) => {
-    return percentage >= threshold ? 'text-red-600' : 'text-green-600';
+  const download = () => {
+    saveBlob(new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' }),
+      `proctoring_report_${reportId || 'session'}.json`);
   };
+
+  // PDF / Word are built by the server (GET /api/reports/<id>/pdf|docx); errors are shown instead of a broken file
+  const downloadDoc = async (kind) => {
+    setBusy(kind);
+    setDlError(null);
+    try {
+      const res = await fetch(`/api/reports/${reportId}/${kind}`);
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `Server answered ${res.status}`);
+      }
+      saveBlob(await res.blob(), `proctoring_report_${reportId}.${kind}`);
+    } catch (e) {
+      setDlError(`${kind === 'pdf' ? 'PDF' : 'Word'} download failed: ${e.message}`);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const docButtons = reportId && (
+    <>
+      <button onClick={() => downloadDoc('pdf')} disabled={!!busy} className="btn btn-primary">
+        <FileText className="w-4 h-4" /> {busy === 'pdf' ? 'Preparing PDF...' : 'Download PDF'}
+      </button>
+      <button onClick={() => downloadDoc('docx')} disabled={!!busy} className="btn btn-primary">
+        <FileText className="w-4 h-4" /> {busy === 'docx' ? 'Preparing Word...' : 'Download Word'}
+      </button>
+    </>
+  );
 
   return (
-    <div className="card">
-      <h2 className="text-xl font-bold text-gray-900 mb-4">Session Statistics</h2>
-      
-      {/* Summary Cards */}
-      <div className="grid grid-cols-2 gap-4 mb-6">
-        <div className="bg-blue-50 rounded-lg p-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm text-blue-600 font-medium">Total Frames</p>
-              <p className="text-2xl font-bold text-blue-900">{stats.total_frames}</p>
-            </div>
-            <TrendingUp className="w-8 h-8 text-blue-400" />
-          </div>
+    <div className="space-y-6">
+      <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
+        <div>
+          <h1 className="page-title">Session results</h1>
+          <p className="text-muted mt-1">Candidate {report.meta?.candidate} · {report.meta?.created}</p>
         </div>
-        
-        <div className="bg-purple-50 rounded-lg p-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm text-purple-600 font-medium">Analyzed</p>
-              <p className="text-2xl font-bold text-purple-900">{stats.analyzed_frames}</p>
-            </div>
-            <TrendingUp className="w-8 h-8 text-purple-400" />
-          </div>
+        <div className="flex flex-wrap gap-3">
+          {docButtons}
+          <button onClick={download} className="btn btn-secondary"><Download className="w-4 h-4" /> Download JSON</button>
+          <button onClick={onNewSession} className="btn btn-secondary"><Play className="w-4 h-4" /> New session</button>
+          <button onClick={onReset} className="btn btn-secondary"><RotateCcw className="w-4 h-4" /> New candidate</button>
         </div>
       </div>
 
-      {/* Baseline Info */}
-      {stats.calibrated && stats.baseline && (
-        <div className="bg-green-50 border border-green-200 rounded-lg p-4 mb-6">
-          <h3 className="font-semibold text-green-900 mb-2">Baseline Head Pose</h3>
-          <div className="grid grid-cols-3 gap-2 text-sm">
-            <div>
-              <span className="text-green-600">Yaw:</span>
-              <span className="font-mono ml-1 text-green-900">{stats.baseline.yaw?.toFixed(1)}°</span>
-            </div>
-            <div>
-              <span className="text-green-600">Pitch:</span>
-              <span className="font-mono ml-1 text-green-900">{stats.baseline.pitch?.toFixed(1)}°</span>
-            </div>
-            <div>
-              <span className="text-green-600">Roll:</span>
-              <span className="font-mono ml-1 text-green-900">{stats.baseline.roll?.toFixed(1)}°</span>
-            </div>
-          </div>
-        </div>
+      {dlError && (
+        <div className="alert alert-error" role="alert"><AlertTriangle className="w-5 h-5 flex-shrink-0" /> <span>{dlError}</span></div>
       )}
 
-      {stats.tuning && (
-        <div className="bg-slate-50 border border-slate-200 rounded-lg p-4 mb-6">
-          <h3 className="font-semibold text-slate-900 mb-2">Tuning Profile</h3>
-          <div className="grid grid-cols-2 gap-2 text-sm">
-            <div>
-              <span className="text-slate-600">Profile:</span>
-              <span className="ml-1 font-semibold text-slate-900">{stats.tuning.profile}</span>
-            </div>
-            <div>
-              <span className="text-slate-600">Logging:</span>
-              <span className={`ml-1 font-semibold ${stats.tuning.debug_logging_enabled ? 'text-green-700' : 'text-slate-700'}`}>
-                {stats.tuning.debug_logging_enabled ? 'Enabled' : 'Disabled'}
-              </span>
-            </div>
-            <div>
-              <span className="text-slate-600">Log Format:</span>
-              <span className="ml-1 font-mono text-slate-900">{stats.tuning.debug_log_format || 'jsonl'}</span>
-            </div>
-            <div className="col-span-2 break-all">
-              <span className="text-slate-600">Log Path:</span>
-              <span className="ml-1 font-mono text-slate-900">{stats.tuning.debug_log_path || 'Not enabled'}</span>
-            </div>
-          </div>
+      <section className={`border-2 rounded-xl p-5 flex flex-col sm:flex-row sm:items-center gap-4 ${cls}`} aria-label="Verdict">
+        <Icon className="w-12 h-12 flex-shrink-0" />
+        <div className="flex-1">
+          <p className="text-2xl font-bold tracking-tight">{v.label}</p>
+          <p className="font-medium">{v.headline}</p>
+          {v.reasons.slice(1).map((r) => <p key={r} className="text-sm mt-1 opacity-90">• {r}</p>)}
+          {v.score_explanation && <p className="text-xs mt-2 opacity-80">{v.score_explanation}</p>}
+        </div>
+        <div className="sm:text-right">
+          <p className="text-sm font-medium opacity-80">Violation score</p>
+          <p className="text-4xl font-bold leading-none">{v.score.toFixed(1)}</p>
+          <p className="text-xs opacity-80">of 100</p>
+        </div>
+      </section>
 
-          {stats.thresholds && (
-            <div className="mt-4 grid grid-cols-2 gap-2 text-xs font-mono text-slate-700">
-              <div>Face ratio: {stats.thresholds.passive_liveness_min_face_ratio}</div>
-              <div>Brightness: {stats.thresholds.passive_liveness_min_brightness}-{stats.thresholds.passive_liveness_max_brightness}</div>
-              <div>Blur var: {stats.thresholds.passive_liveness_min_blur_variance}</div>
-              <div>EAR threshold: {stats.thresholds.passive_ear_threshold}</div>
-              <div>Blink frames: {stats.thresholds.passive_ear_closed_frames_min}</div>
-              <div>Motion std: {stats.thresholds.passive_motion_static_std_threshold}/{stats.thresholds.passive_motion_natural_std_threshold}</div>
-            </div>
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div className="stat stat-blue">
+          <p className="stat-label inline-flex items-center gap-1"><Clock className="w-4 h-4" /> Video analysed</p>
+          <p className="stat-value">{(video.duration_s || 0).toFixed(0)} s</p>
+          <p className="text-xs opacity-80">{video.n_samples} samples @ {(video.sample_rate_hz || 0).toFixed(2)}/s</p>
+        </div>
+        <div className="stat stat-orange">
+          <p className="stat-label inline-flex items-center gap-1"><Mic className="w-4 h-4" /> Audio</p>
+          <p className="stat-value capitalize">{(audio.status || 'not analysed').replace(/_/g, ' ')}</p>
+          {audio.status === 'ok' && <p className="text-xs opacity-80">{audio.duration_s?.toFixed(0)} s, speech {audio.speech_s?.toFixed(1)} s</p>}
+        </div>
+        <div className="stat stat-purple">
+          <p className="stat-label inline-flex items-center gap-1"><ListChecks className="w-4 h-4" /> Events</p>
+          <p className="stat-value">{report.timeline.length}</p>
+          {video.baseline && (
+            <p className="text-xs opacity-80 font-mono">
+              baseline yaw {video.baseline.yaw.toFixed(1)}° pitch {video.baseline.pitch.toFixed(1)}° roll {video.baseline.roll.toFixed(1)}°
+            </p>
           )}
         </div>
-      )}
+      </div>
 
-      {/* Current Frame Details */}
-      {currentFrame && stats.calibrated && (
-        <div className="bg-gray-50 rounded-lg p-4 mb-6">
-          <h3 className="font-semibold text-gray-900 mb-3">Current Frame Analysis</h3>
-          
-          <div className="space-y-2 text-sm">
-            <div className="flex justify-between">
-              <span className="text-gray-600">Identity Match:</span>
-              <span className={`font-medium ${
-                currentFrame.identity === 'Authorized' ? 'text-green-600' : 'text-red-600'
-              }`}>
-                {currentFrame.distance?.toFixed(3)}
-              </span>
-            </div>
-            
-            <div className="flex justify-between">
-              <span className="text-gray-600">Head Deviation:</span>
-              <span className="font-mono text-gray-900">
-                ΔY: {currentFrame.pose.relative_yaw?.toFixed(1)}° 
-                ΔP: {currentFrame.pose.relative_pitch?.toFixed(1)}°
-                ΔR: {currentFrame.pose.relative_roll?.toFixed(1)}°
-              </span>
-            </div>
-            
-            <div className="flex justify-between">
-              <span className="text-gray-600">Gaze Ratios:</span>
-              <span className="font-mono text-gray-900">
-                L: {currentFrame.gaze.left_ratio?.toFixed(2)} 
-                R: {currentFrame.gaze.right_ratio?.toFixed(2)}
-              </span>
-            </div>
-
-            {currentFrame.liveness && (
-              <div className="flex justify-between">
-                <span className="text-gray-600">Passive Liveness:</span>
-                <span className={`font-medium ${
-                  currentFrame.liveness.passive_label === 'live'
-                    ? 'text-green-600'
-                    : currentFrame.liveness.passive_label === 'spoof'
-                    ? 'text-red-600'
-                    : currentFrame.liveness.passive_label === 'quality_insufficient'
-                    ? 'text-orange-600'
-                    : 'text-yellow-600'
-                }`}>
-                  {currentFrame.liveness.passive_label} ({currentFrame.liveness.passive_score?.toFixed(2)})
-                </span>
-              </div>
-            )}
-
-            {currentFrame.liveness?.quality_insufficient && (
-              <div className="flex justify-between">
-                <span className="text-gray-600">Quality Gate:</span>
-                <span className="font-medium text-orange-600">
-                  Insufficient
-                </span>
-              </div>
-            )}
-
-            {currentFrame.liveness?.signals && (
-              <>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Blink Rate:</span>
-                  <span className="font-mono text-gray-900">
-                    {currentFrame.liveness.signals.blink_rate_per_min?.toFixed(1)} /min
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Blink Recent:</span>
-                  <span className={`font-medium ${
-                    currentFrame.liveness.signals.blink_detected_recently ? 'text-green-600' : 'text-yellow-600'
-                  }`}>
-                    {currentFrame.liveness.signals.blink_detected_recently ? 'Yes' : 'No'}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Avg EAR:</span>
-                  <span className="font-mono text-gray-900">
-                    {currentFrame.liveness.signals.avg_ear?.toFixed(3)}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Motion Consistency:</span>
-                  <span className={`font-medium ${
-                    currentFrame.liveness.signals.motion_label === 'consistent'
-                      ? 'text-green-600'
-                      : currentFrame.liveness.signals.motion_label === 'static' || currentFrame.liveness.signals.motion_label === 'unstable'
-                      ? 'text-red-600'
-                      : 'text-yellow-600'
-                  }`}>
-                    {currentFrame.liveness.signals.motion_label} ({currentFrame.liveness.signals.motion_consistency_score?.toFixed(2)})
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Motion Delta:</span>
-                  <span className="font-mono text-gray-900">
-                    {currentFrame.liveness.signals.motion_delta?.toFixed(2)}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Anti-Spoof Model:</span>
-                  <span className={`font-medium ${
-                    currentFrame.liveness.signals.anti_spoof_mode === 'onnxruntime' ? 'text-green-600' : 'text-yellow-600'
-                  }`}>
-                    {currentFrame.liveness.signals.anti_spoof_mode || 'fallback'}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Anti-Spoof Live:</span>
-                  <span className="font-mono text-gray-900">
-                    {currentFrame.liveness.signals.anti_spoof_live_score?.toFixed(2)}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Anti-Spoof Label:</span>
-                  <span className={`font-medium ${
-                    currentFrame.liveness.signals.anti_spoof_label === 'live'
-                      ? 'text-green-600'
-                      : currentFrame.liveness.signals.anti_spoof_label === 'spoof'
-                      ? 'text-red-600'
-                      : 'text-yellow-600'
-                  }`}>
-                    {currentFrame.liveness.signals.anti_spoof_label}
-                  </span>
-                </div>
-                {currentFrame.liveness.signals.quality_reason && (
-                  <div className="flex justify-between">
-                    <span className="text-gray-600">Quality Reason:</span>
-                    <span className="font-medium text-orange-600 text-right">
-                      {currentFrame.liveness.signals.quality_reason}
-                    </span>
-                  </div>
-                )}
-              </>
-            )}
-          </div>
+      {report.session_violation?.violated && (
+        <div className="alert alert-error" role="alert">
+          <Ban className="w-5 h-5 flex-shrink-0" />
+          <span>
+            <span className="font-semibold">Session marked as violated.</span>{' '}
+            Limits exceeded for: {report.session_violation.groups_exceeded.map((g) => GROUP_META[g]?.label || g).join(', ')}.
+            Their evidence was {Object.values(report.evidence_upload || {}).some((u) => u.status === 'failed') ? 'partly NOT ' : ''}uploaded
+            with session ID <span className="font-mono">{report.meta?.session_id}</span>.
+          </span>
         </div>
       )}
-      {stats.passive_liveness && (
-        <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-4 mb-6">
-          <h3 className="font-semibold text-indigo-900 mb-2">Passive Liveness (Heuristic)</h3>
-          <div className="grid grid-cols-2 gap-2 text-sm">
-            <div>
-              <span className="text-indigo-700">Current:</span>
-              <span className="ml-1 font-semibold text-indigo-900">{stats.passive_liveness.label}</span>
-            </div>
-            <div>
-              <span className="text-indigo-700">Avg Score:</span>
-              <span className="ml-1 font-mono text-indigo-900">{stats.passive_liveness.stats?.avg_score?.toFixed?.(2) ?? '0.00'}</span>
-            </div>
-            <div>
-              <span className="text-indigo-700">Live:</span>
-              <span className="ml-1 font-mono text-indigo-900">{stats.passive_liveness.stats?.live ?? 0}</span>
-            </div>
-            <div>
-              <span className="text-indigo-700">Suspicious:</span>
-              <span className="ml-1 font-mono text-indigo-900">{stats.passive_liveness.stats?.suspicious ?? 0}</span>
-            </div>
-            <div>
-              <span className="text-indigo-700">Spoof:</span>
-              <span className="ml-1 font-mono text-indigo-900">{stats.passive_liveness.stats?.spoof ?? 0}</span>
-            </div>
-            <div>
-              <span className="text-indigo-700">Quality Low:</span>
-              <span className="ml-1 font-mono text-indigo-900">{stats.passive_liveness.stats?.quality_insufficient ?? 0}</span>
-            </div>
-            <div>
-              <span className="text-indigo-700">Motion Consistent:</span>
-              <span className="ml-1 font-mono text-indigo-900">{stats.passive_liveness.stats?.motion_consistent ?? 0}</span>
-            </div>
-            <div>
-              <span className="text-indigo-700">Motion Static:</span>
-              <span className="ml-1 font-mono text-indigo-900">{stats.passive_liveness.stats?.motion_static ?? 0}</span>
-            </div>
-            <div>
-              <span className="text-indigo-700">Motion Unstable:</span>
-              <span className="ml-1 font-mono text-indigo-900">{stats.passive_liveness.stats?.motion_unstable ?? 0}</span>
-            </div>
-            <div>
-              <span className="text-indigo-700">Motion Variable:</span>
-              <span className="ml-1 font-mono text-indigo-900">{stats.passive_liveness.stats?.motion_variable ?? 0}</span>
-            </div>
-            <div>
-              <span className="text-indigo-700">Evaluated:</span>
-              <span className="ml-1 font-mono text-indigo-900">{stats.passive_liveness.stats?.frames_evaluated ?? 0}</span>
-            </div>
-            <div>
-              <span className="text-indigo-700">Blink Count:</span>
-              <span className="ml-1 font-mono text-indigo-900">{stats.passive_liveness.stats?.blink_count ?? 0}</span>
-            </div>
-            <div>
-              <span className="text-indigo-700">Blink Rate:</span>
-              <span className="ml-1 font-mono text-indigo-900">{stats.passive_liveness.stats?.blink_rate_per_min?.toFixed?.(1) ?? '0.0'}/min</span>
-            </div>
-            <div>
-              <span className="text-indigo-700">Blink Recent:</span>
-              <span className={`ml-1 font-semibold ${stats.passive_liveness.stats?.blink_detected_recently ? 'text-green-700' : 'text-yellow-700'}`}>
-                {stats.passive_liveness.stats?.blink_detected_recently ? 'Yes' : 'No'}
-              </span>
-            </div>
-            <div>
-              <span className="text-indigo-700">Model Live:</span>
-              <span className="ml-1 font-mono text-indigo-900">{stats.passive_liveness.stats?.anti_spoof_model_live ?? 0}</span>
-            </div>
-            <div>
-              <span className="text-indigo-700">Model Spoof:</span>
-              <span className="ml-1 font-mono text-indigo-900">{stats.passive_liveness.stats?.anti_spoof_model_spoof ?? 0}</span>
-            </div>
-            <div>
-              <span className="text-indigo-700">Model Missing:</span>
-              <span className="ml-1 font-mono text-indigo-900">{stats.passive_liveness.stats?.anti_spoof_model_missing ?? 0}</span>
-            </div>
-          </div>
 
-          {stats.passive_liveness?.model && (
-            <div className={`mt-4 rounded-lg border p-4 ${stats.passive_liveness.model.available ? 'bg-green-50 border-green-200' : 'bg-yellow-50 border-yellow-200'}`}>
-              <h3 className="font-semibold mb-2 text-gray-900">Anti-Spoof Model Status</h3>
-              <div className="grid grid-cols-2 gap-2 text-sm">
-                <div>
-                  <span className="text-gray-600">Available:</span>
-                  <span className={`ml-1 font-semibold ${stats.passive_liveness.model.available ? 'text-green-700' : 'text-yellow-700'}`}>
-                    {stats.passive_liveness.model.available ? 'Yes' : 'No'}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-gray-600">Mode:</span>
-                  <span className="ml-1 font-mono text-gray-900">{stats.passive_liveness.model.mode}</span>
-                </div>
-                <div className="col-span-2 break-all">
-                  <span className="text-gray-600">Path:</span>
-                  <span className="ml-1 font-mono text-gray-900">{stats.passive_liveness.model.path || 'Not configured'}</span>
-                </div>
-              </div>
-            </div>
+      {report.warnings.map((w) => (
+        <div key={w} className="alert alert-warn"><AlertTriangle className="w-5 h-5 flex-shrink-0" /> <span>{w}</span></div>
+      ))}
+
+      {scoreRows.length > 0 && <ScoringCard verdict={v} rows={scoreRows} />}
+
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+        <section className="card">
+          <SectionTitle Icon={TrendingUp}>Violation percentage by type</SectionTitle>
+          {rows.length ? <PercentBars rows={rows} /> : <p className="text-sm text-subtle">Nothing could be measured.</p>}
+        </section>
+        <section className="card">
+          <SectionTitle Icon={GanttChartSquare}>Timeline (video and audio)</SectionTitle>
+          {report.timeline.length ? (
+            <Timeline events={report.timeline} duration={Math.max(video.duration_s || 0, audio.duration_s || 0)} />
+          ) : (
+            <p className="text-sm text-subtle">No violation events.</p>
           )}
-        </div>
+        </section>
+      </div>
+
+      {report.evidence && (
+        <section className="card space-y-6">
+          <SectionTitle Icon={ImageIcon}>Evidence</SectionTitle>
+          {EVIDENCE_ORDER.map((group) => (
+            <EvidenceGroup
+              key={group}
+              group={group}
+              data={report.evidence[group]}
+              counter={report.evidence_counters?.[group]}
+              upload={report.evidence_upload?.[group]}
+              reportId={reportId}
+            />
+          ))}
+        </section>
       )}
 
-      {/* Violation Statistics */}
-      <div className="space-y-3">
-        <h3 className="font-semibold text-gray-900">Violation Metrics</h3>
-        
-        {/* Head Pose Deviation */}
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <AlertTriangle className="w-4 h-4 text-orange-500" />
-            <span className="text-sm text-gray-700">Head Deviation</span>
+      <section className="card">
+        <SectionTitle Icon={Mic}>Audio events</SectionTitle>
+        {audioEvents.length ? (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead><tr className="table-head"><th className="py-2 pr-4">Type</th><th className="pr-4">Start (s)</th><th className="pr-4">End (s)</th><th className="pr-4">Duration (s)</th><th>Details</th></tr></thead>
+              <tbody>
+                {audioEvents.map((e, i) => (
+                  <tr key={i} className="table-row">
+                    <td className="py-2 pr-4 capitalize">{nice(e.type)}</td><td className="pr-4">{e.start_s.toFixed(2)}</td>
+                    <td className="pr-4">{e.end_s.toFixed(2)}</td><td className="pr-4">{e.duration_s.toFixed(2)}</td>
+                    <td className="font-mono text-xs text-muted">{JSON.stringify(e.details || {})}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
-          <div className="text-right">
-            <span className={`text-sm font-semibold ${
-              getStatusClass(parseFloat(getPercentage(stats.stats.deviation, stats.analyzed_frames)), 25)
-            }`}>
-              {stats.stats.deviation} ({getPercentage(stats.stats.deviation, stats.analyzed_frames)}%)
-            </span>
-            <span className="text-xs text-gray-500 ml-1">/ 25%</span>
-          </div>
-        </div>
+        ) : (
+          <p className="text-sm text-subtle">{audio.status === 'ok' ? 'No audio events.' : 'Audio was not analysed.'}</p>
+        )}
+      </section>
 
-        {/* Gaze Deviation */}
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Eye className="w-4 h-4 text-blue-500" />
-            <span className="text-sm text-gray-700">Gaze Deviation</span>
-          </div>
-          <div className="text-right">
-            <span className={`text-sm font-semibold ${
-              getStatusClass(parseFloat(getPercentage(stats.stats.gaze_deviation, stats.analyzed_frames)), 30)
-            }`}>
-              {stats.stats.gaze_deviation} ({getPercentage(stats.stats.gaze_deviation, stats.analyzed_frames)}%)
-            </span>
-            <span className="text-xs text-gray-500 ml-1">/ 30%</span>
-          </div>
+      <details className="card group">
+        <summary className="card-title cursor-pointer flex items-center gap-2 list-none">
+          <Table2 className="w-5 h-5 text-primary-600 dark:text-primary-400" /> Per-violation table (numerator / denominator)
+        </summary>
+        <div className="overflow-x-auto mt-4">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="table-head">
+                <th className="py-2 pr-4">Type</th><th className="pr-4">Source</th><th className="pr-4">%</th><th className="pr-4">Numerator / denominator</th>
+                <th className="pr-4">Seconds</th><th className="pr-4">Events</th><th className="pr-4">Severity</th><th>Points</th>
+              </tr>
+            </thead>
+            <tbody>
+              {allRows.map((r) => (
+                <tr key={r.type} className="table-row">
+                  <td className="py-2 pr-4 capitalize">{nice(r.type)}</td>
+                  <td className="pr-4">{r.source}</td>
+                  <td className="pr-4 font-mono">{r.measurable ? r.percentage.toFixed(1) : 'n/a'}</td>
+                  <td className="pr-4">{r.measurable ? `${r.numerator} / ${r.denominator} ${r.unit}` : <span className="text-subtle">not measurable</span>}</td>
+                  <td className="pr-4 font-mono">{r.duration_s.toFixed(1)}</td>
+                  <td className="pr-4">{r.count}</td>
+                  <td className="pr-4">
+                    {r.severity
+                      ? <span className={`badge text-xs px-2 py-0.5 ${SEVERITY_BADGE[r.severity] || 'badge-muted'}`}>{r.severity}</span>
+                      : (r.critical ? <span className="badge badge-danger text-xs px-2 py-0.5">critical</span> : '')}
+                  </td>
+                  <td className="font-mono">{r.max_points != null ? `${r.score != null ? r.score.toFixed(1) : '-'} / ${r.max_points}` : r.weight}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
+      </details>
 
-        {/* Multiple Persons */}
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Users className="w-4 h-4 text-purple-500" />
-            <span className="text-sm text-gray-700">Multiple Persons</span>
-          </div>
-          <div className="text-right">
-            <span className={`text-sm font-semibold ${
-              getStatusClass(parseFloat(getPercentage(stats.stats.multiple_person, stats.analyzed_frames)), 20)
-            }`}>
-              {stats.stats.multiple_person} ({getPercentage(stats.stats.multiple_person, stats.analyzed_frames)}%)
-            </span>
-            <span className="text-xs text-gray-500 ml-1">/ 20%</span>
-          </div>
-        </div>
-
-        {/* Prohibited Objects */}
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Package className="w-4 h-4 text-red-500" />
-            <span className="text-sm text-gray-700">Prohibited Objects</span>
-          </div>
-          <div className="text-right">
-            <span className={`text-sm font-semibold ${
-              getStatusClass(parseFloat(getPercentage(stats.stats.prohibited_object, stats.analyzed_frames)), 15)
-            }`}>
-              {stats.stats.prohibited_object} ({getPercentage(stats.stats.prohibited_object, stats.analyzed_frames)}%)
-            </span>
-            <span className="text-xs text-gray-500 ml-1">/ 15%</span>
-          </div>
-        </div>
-      </div>
-
-      {/* Progress Bars */}
-      <div className="mt-4 space-y-2">
-        <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
-          <div 
-            className={`h-full transition-all duration-300 ${
-              getPercentage(stats.stats.deviation, stats.analyzed_frames) >= 25 
-                ? 'bg-red-500' 
-                : 'bg-green-500'
-            }`}
-            style={{ width: `${Math.min(100, getPercentage(stats.stats.deviation, stats.analyzed_frames))}%` }}
-          />
-        </div>
-      </div>
+      {reportId && (
+        <section className="card flex flex-col sm:flex-row sm:items-center justify-between gap-3" aria-label="Download report">
+          <p className="text-sm text-muted">Download this report. PDF and Word leave out the voice clips (they can only be played here).</p>
+          <div className="flex flex-wrap gap-3">{docButtons}</div>
+        </section>
+      )}
     </div>
   );
 };

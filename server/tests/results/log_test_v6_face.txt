@@ -1,0 +1,8 @@
+(a) LFW test: v1 acc 0.967 FRR 0.062 | v2 acc 0.987 FRR 0.014
+(b correct ref) [legacy] IDENTITY_MISMATCH {'TP': 0, 'FP': 0, 'FN': 0, 'TN': 38, 'precision': None, 'recall': None}; score range 0.365..0.672
+(b correct ref) [v2] IDENTITY_MISMATCH {'TP': 0, 'FP': 0, 'FN': 0, 'TN': 38, 'precision': None, 'recall': None}; score range 0.798..0.938
+(c impostor ref) [legacy] IDENTITY_MISMATCH {'TP': 33, 'FP': 0, 'FN': 0, 'TN': 0, 'precision': 1.0, 'recall': 1.0}; score range 1.363..1.469
+(c impostor ref) [v2] IDENTITY_MISMATCH {'TP': 33, 'FP': 0, 'FN': 0, 'TN': 0, 'precision': 1.0, 'recall': 1.0}; score range 0.056..0.938
+(d unrelated ref) [legacy] IDENTITY_MISMATCH {'TP': 38, 'FP': 0, 'FN': 0, 'TN': 0, 'precision': 1.0, 'recall': 1.0}; score range 1.250..1.359
+(d unrelated ref) [v2] IDENTITY_MISMATCH {'TP': 38, 'FP': 0, 'FN': 0, 'TN': 0, 'precision': 1.0, 'recall': 1.0}; score range -0.009..0.165
+V6 FACE: PASS

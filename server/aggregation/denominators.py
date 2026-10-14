@@ -1,0 +1,26 @@
+"""
+Which samples count towards each violation type (flow.txt §A.10, §C).
+
+One rule: a sample counts towards a type (numerator AND denominator) exactly when that type was
+measurable on it. Only pose and gaze need the calibration baseline, so only they skip calibration samples.
+"""
+
+import config as C
+
+FACE_DEPENDENT = {C.IDENTITY_MISMATCH, C.HEAD_POSE_DEVIATION, C.GAZE_AWAY}
+NEEDS_BASELINE = {C.HEAD_POSE_DEVIATION, C.GAZE_AWAY}
+
+
+def counts_toward(sample, vtype, include_calibration=False):
+    """True if this video sample is part of the analysed population for `vtype`."""
+    if vtype in NEEDS_BASELINE and sample.get("phase") == "calibration" and not include_calibration:
+        return False
+    if vtype not in FACE_DEPENDENT:
+        return True
+    if not sample.get("face_visible", True):
+        return False
+    if vtype == C.HEAD_POSE_DEVIATION:
+        return sample.get("pose_ok", True) and "rel_yaw" in sample
+    if vtype == C.GAZE_AWAY:
+        return C.GAZE_AWAY in sample.get("raw", {})
+    return sample.get("identity_ok") is not None

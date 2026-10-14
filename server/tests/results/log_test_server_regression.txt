@@ -1,0 +1,8 @@
+>>> Server starting...
+>>> Imports done
+>>> Loading AI models...
+>>> FaceNet loaded
+>>> MediaPipe models loaded
+>>> YOLO model loaded
+server.py /api/health 200 {'models_loaded': True, 'status': 'healthy', 'timestamp': 1791982402.5590785} | /api/get-stats 200
+SERVER REGRESSION: PASS
