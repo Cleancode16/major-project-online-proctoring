@@ -47,7 +47,8 @@ $requiredPackages = @(
     "resemblyzer",
     "silero-vad",
     "reportlab",
-    "python-docx"
+    "python-docx",
+    "safetensors"
 )
 
 $missingPackages = @()
@@ -63,7 +64,7 @@ if ($missingPackages.Count -gt 0) {
     Write-Host "[INFO] Missing packages: $($missingPackages -join ', ')" -ForegroundColor Yellow
 
     # Install protobuf FIRST to avoid version conflicts
-    & $venvPip install protobuf==3.20.3
+    & $venvPip install protobuf==4.25.9
     if ($LASTEXITCODE -ne 0) {
         Write-Host "[ERROR] Failed to install protobuf. Aborting startup." -ForegroundColor Red
         exit 1
@@ -77,7 +78,7 @@ if ($missingPackages.Count -gt 0) {
     }
 
     # Speaker encoder + VAD without their dependency lists, so they cannot move the TF/numpy pins
-    & $venvPip install --no-deps Resemblyzer==0.1.4 silero-vad==6.2.3
+    & $venvPip install --no-deps Resemblyzer==0.1.4 silero-vad==6.2.3 mediapipe==0.10.21
     if ($LASTEXITCODE -ne 0) {
         Write-Host "[ERROR] Failed to install resemblyzer / silero-vad." -ForegroundColor Red
         exit 1
@@ -86,6 +87,18 @@ if ($missingPackages.Count -gt 0) {
     Write-Host "[OK] Dependencies installed`n" -ForegroundColor Green
 } else {
     Write-Host "[OK] Dependencies verified`n" -ForegroundColor Green
+}
+
+# GZ3: L2CS-Net gaze weights (server\models is not in git); downloads once and checks the SHA-256
+$l2csWeights = Join-Path $serverDir "models\l2cs\l2cs_gaze360_resnet50.safetensors"
+if (-not (Test-Path $l2csWeights)) {
+    Write-Host "[INFO] Downloading L2CS-Net gaze weights (~96 MB)..." -ForegroundColor Yellow
+    Push-Location $serverDir
+    & $venvPython -m video.l2cs --download
+    Pop-Location
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "[WARN] L2CS weights not downloaded; gaze will use the landmark (v2) method." -ForegroundColor Yellow
+    }
 }
 
 # Start server banner

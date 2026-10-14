@@ -22,10 +22,14 @@ class VAD:
         if vcfg["engine"] == "silero":
             try:
                 import torch
+                # PERF1: silero_vad/model.py calls torch.set_num_threads(1) at import. That is process-wide and
+                # made YOLO / L2CS run on one thread for the whole live session (~3x slower video), so the
+                # thread count is restored right after the import / load.
+                n_threads = torch.get_num_threads()
                 from silero_vad import load_silero_vad
-                torch.set_num_threads(1)
                 self._torch = torch
                 self._model = load_silero_vad()
+                torch.set_num_threads(n_threads)
                 self._model.reset_states()
                 self.frame = 512
                 self.engine = "silero"

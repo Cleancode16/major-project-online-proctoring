@@ -56,8 +56,17 @@ Pinned audio stack (do not change without updating plan.md):
   tensorflow==2.15.1  tensorflow-hub==0.16.1  tf-keras==2.15.0
   numpy==1.26.4  scipy==1.13.1  sounddevice==0.5.6  soundfile==0.12.1
   resampy==0.4.3
-Kept from v1: keras==2.15.0, keras-facenet, mediapipe==0.10.9,
-  protobuf==3.20.3, ultralytics, torch (CPU).
+Kept from v1: keras==2.15.0, keras-facenet, ultralytics, torch (CPU).
+GZ3 (eye-gaze spec from the user): mediapipe 0.10.9 -> 0.10.21 (installed
+  with --no-deps: its jax/jaxlib dependency would raise ml-dtypes to 0.5 and
+  break tensorflow 2.15.1), opencv-python 4.8.1.78 -> 4.10.0.84
+  (opencv-contrib-python dropped from the list - no contrib module is used
+  and both wheels write cv2/), protobuf 3.20.3 -> 4.25.9 (mediapipe needs
+  >= 4.25.3, TF 2.15.1 accepts < 5), numpy 1.26.4 unchanged, + safetensors
+  0.8.0. The spec's Python 3.10.20 was not applied: .venv stays 3.10.0
+  (same minor version; rebuilding the env would re-pin the whole TF stack).
+  CUDA is not used (user decision): torch is the CPU build.
+  Rollback: server/requirements_freeze_before_GZ3.txt.
 Added:
   resemblyzer (speaker d-vector encoder; PyTorch; weights ship inside the
     wheel, so it works offline). Installed with --no-deps so it cannot move
@@ -155,6 +164,48 @@ v2: time based. sampling.fps = 3.0 samples/s of video time over the whole
     Each sample carries t (seconds), used by every later stage, so
     persistence and durations are in seconds, independent of camera fps.
     Live mode: the UI calls VideoAnalyzer.process() at the same rate.
+DET2 (user report: phones and multiple persons not detected accurately).
+    Looked at the live session 75_20261015_001107 (run before PERF1: 0.7
+    samples/s): the room was dark (mean grey ~45/255); the one "multiple
+    persons" event was FALSE (the candidate's arm holding a dark, blurred
+    phone counted as a 2nd person; the phone itself was missed); gaze was
+    "away" 98% because calibration had 2 samples reading -48 deg.
+    Changes: (1) persons.attach_frac 0.3: a face-less person box that
+    overlaps a face-bearing person box by >= 30% of its own area is that
+    person's arm / hand (detectors.drop_attached); all 6 real two-person
+    snapshots of earlier sessions still count 2. (2) objects: boxes inside
+    the face box are ignored only below conf 0.5
+    (ignore_inside_face_max_conf), so a phone held up in front of the face
+    counts. (3) L2CS calibration gate: calibration gaze must be within
+    |h| <= 25, |v| <= 35 deg absolute and >= 3 such samples; otherwise the
+    forward gaze is taken from the first 5 frontal analysis samples (gaze
+    not flagged until then). (4) Low light: per-sample brightness (mean
+    grey of a 64x36 thumbnail); live warning "low_light" when the 3 s mean
+    is < 60, report warning LOW_LIGHT when >= 30% of samples are dark.
+    Not changed, with reasons: YOLOv8m (no better on the snapshots, 343 vs
+    201 ms); CLAHE / gamma brightening (raised a 2nd person 0.30 -> 0.50 but
+    lowered the candidate's own person conf and added a false "tv").
+    Evidence snapshots carry drawn boxes, so they cannot score phone
+    recall; the labelled sample clip (normal light) has phone recall 1.0.
+FPS10 (user request "take 10 fps to detect all"): sampling.fps = 10.
+    Recorded videos are analysed at 10 samples/s (3.3x the samples of 3 fps;
+    at ~300 ms per sample with L2CS + YOLOv8s that is ~3 s of compute per
+    second of video, so a recorded job takes about 3x the video length).
+    Live: the session hands the newest frame every 0.1 s, frames that
+    arrive while the analyzer is busy are dropped, so the live rate is
+    whatever the CPU reaches (~2.5-3 samples/s on the dev machine after
+    PERF1); 10 fps live needs ~100 ms per sample (a GPU or lighter models).
+    All sample-count windows are now derived from seconds at the actual
+    rate (video/pipeline.windows): head-pose / gaze smoothing smooth_s 1 s,
+    identity majority vote vote_s 1.6 s, person gap persist_gap_s 0.33 s,
+    static-face track static_s 3 s, objects "k of n" over persist_window_s
+    1 s with k = max(2, ceil(0.4 n)) (2 of 3 at 3 fps, 4 of 10 at 10 fps),
+    weak-object reach weak_reach_s 0.33 s. At 3 fps they equal the old
+    sample counts exactly; the legacy profile keeps its counts. Live
+    sessions re-measure the rate (after 5 samples, when it differs by
+    > 15%) and resize the causal smoothers and the 1 s live debounce, so a
+    "10 fps" setting running at 3 fps does not get 3x longer windows.
+    max_thumbnails 400 -> 1200 for the extra samples.
 Cost (measured on the sample clip, 1920x1080, CPU, median after warm-up,
 YOLOv8s): face detect + FaceNet 64 ms, face mesh + pose + gaze 11 ms,
 YOLO 95 ms, total ~172 ms per sample -> 3 fps needs ~0.52 s of compute per
@@ -329,6 +380,56 @@ Accuracy upgrade (GZ2, 2026-10-14):
      tau = gaze.adapt_tau_s (120 s), only from clearly centred samples,
      capped at gaze.adapt_max_ratio (0.05 = ~7 deg).
   Validation: tests/test_hp2_pose_gaze.py (NOT executed yet).
+
+  L2CS-Net gaze (GZ3, user spec; default gaze.method = "l2cs"):
+  Why: the iris-ratio method needs a hand-set gain (deg_per_ratio) and was
+  never measured on real "looking away" footage; L2CS-Net regresses the
+  gaze direction from the face image (paper: 3.92 deg MAE on Gaze360,
+  geometric iris methods typically 8-15 deg).
+  Model: L2CS-Net, ResNet50, Gaze360 weights, PyTorch, CPU only.
+    Weights: server/models/l2cs/l2cs_gaze360_resnet50.safetensors from
+    huggingface.co/py-feat/l2cs = the official L2CSNet_gaze360.pkl converted
+    to safetensors by the Py-Feat project (no pickle: loading cannot run
+    code). The official Google Drive folder now answers 404. SHA-256
+    75405bdc...eca0e checked on download (python -m video.l2cs --download;
+    start-backend.ps1 runs it when the file is missing).
+    Licence: code MIT; Gaze360-trained weights are for research /
+    non-commercial use only.
+  Per sample (video/l2cs.py, pipeline._gaze):
+    1. MediaPipe landmarks still decide blinks (eye opening < blink ratio
+       -> gaze not valid for this sample, as before).
+    2. Crop = the candidate's MediaPipe face-detection box (the upstream
+       pipeline uses its RetinaFace box), BGR -> RGB, resize 224x224, then
+       to the input size, ImageNet normalisation (= upstream pipeline).
+    3. Two 90-bin heads (4 deg bins, -180..176): angle = sum(softmax * bin).
+       First head = horizontal yaw (> 0 = towards image LEFT), second =
+       pitch (> 0 = UP) per the upstream gaze vector (-cos p sin y, -sin p,
+       -cos p cos y). Stored as h = -yaw, v = -pitch so > 0 = image right /
+       down, the same signs as the iris method (labels: image right =
+       candidate's left, camera not mirrored).
+    4. Calibration: the candidate-specific forward gaze = median of h / v
+       over the accepted calibration samples (same calibration as before).
+    5. dh, dv = gaze - baseline (degrees). L2CS gaze already contains the
+       head rotation, so head pose is NOT added (gaze.l2cs.min_eye_deg > 0
+       can still require an eye-in-head part = gaze - head pose; default 0).
+    6. Drift correction: offset follows dh/dv only while |d| < thr/2, tau
+       120 s, capped at 5 deg.
+    7. Temporal filtering: live = exponential smoothing (alpha 0.5);
+       recorded / final = centred moving average over gaze.smooth_window (3).
+    8. Away when |dh| > 15 deg or |dv| > 15 deg (spec starting value, tune
+       on real sessions); hysteresis 2 deg; then gaze.persist_s (1 s) as before.
+  Input size and CPU time (dev machine, after warm-up, 4 torch threads):
+    448 (training size)  ~205-240 ms per face -> recorded videos
+    224 (Py-Feat size)   ~65-80 ms per face   -> live WebRTC, so the 3 fps
+                         budget (333 ms, ~170 ms already used) still holds
+    The first passes are ~10x slower (kernel selection): the model runs two
+    warm-up passes when loaded and the server loads both sizes at start-up.
+  Fallback: if torch / safetensors / the weights are missing, the session
+    uses gaze.fallback ("v2" iris method) and the report gets a warning.
+  The legacy profile keeps v1's iris method.
+  Validation: tests/test_gz3_l2cs.py (decision rule, weights checksum,
+    mirror symmetry on the real clip = axis/sign check, smoothing, timing).
+    NOT executed (user tests).
 
 
 A.7 FACE VERIFICATION (V6)
@@ -735,6 +836,43 @@ Runs only on VAD speech (§B.2), never on silence/noise.
   per-pair 91% compounds to a high per-window detection rate.
   Caveats: LibriSpeech is clean audiobook speech; a laptop mic in a room is
   noisier and the threshold may need re-checking on real recordings.
+
+  VOICE2 (user report: voice module gives many false positives). The live
+  reports showed the candidate's own voice at similarity 0.60-0.69 (thr
+  0.72) and MULTIPLE_SPEAKERS on 25-40% of whole sessions.
+  Measured with tests/calibrate_speaker_live.py: real LibriSpeech speech
+  through a simulated live channel (enrollment: Opus 64 kbps, 40 dB SNR;
+  live: gain 0.5-1.5, noise 12-30 dB SNR, Opus 24/32 kbps; 13 held-out
+  speakers): verify_thr 0.72 against the enrollment print alone rejects
+  13.1% of the candidate's own 2 s chunks; the pairwise speaker-change rule
+  (any pair of chunks within 10 s below diff_thr 0.62) fires on 41% of
+  single-speaker windows, because a window holds ~8 chunks = ~28 pairs and
+  the minimum of many noisy pair scores is almost always low.
+  New rules:
+    1. Session print: mean of this session's chunks whose enrollment
+       similarity >= speaker.adapt_thr (0.70), if >= 3 such chunks. Each
+       chunk's candidate similarity = max(enrollment, session print), then
+       median-of-3 per utterance. Without a voiceprint the reference is the
+       session's dominant voice. Held-out: FRR 13.1% -> 2.3%, FAR 0.7% ->
+       3.3% (EER thr with adaptation 0.724, so verify_thr stays 0.72).
+    2. MULTIPLE_SPEAKERS (speaker.multi_rule "foreign_run"): within +-5 s
+       a run of >= other_run (3, chunks overlap by 50% -> ~4 s) consecutive
+       chunks below other_thr (0.70) AND at least one candidate chunk
+       (>= verify_thr); the window must lie on that run. Chunk-level
+       calibration: 0% false alarms, 95.7% detection (held-out).
+    3. Live check: only when >= 70% of the last 2 s is speech
+       (live_min_speech_frac) and with the same session print, built from
+       live chunks >= adapt_thr.
+  End-to-end (tests/eval_voice2.py, real AudioAnalyzer, 6 held-out
+  speakers, share of speech windows flagged VOICE_MISMATCH or
+  MULTIPLE_SPEAKERS; old -> new):
+    candidate alone (false positives)            23.2% -> 0.0%
+    conversation, candidate's own speech         55.6% -> 4.1%
+    conversation, other person's speech          99.7% -> 93.3%
+    impostor only (VOICE_MISMATCH)               87%   -> 87%
+  Caveat: the channel is simulated (Opus + noise + gain); browser noise
+  suppression / AGC are not modelled. The old rule stays available
+  (multi_rule "pairwise").
 
 
 B.6 AUDIO EVENTS + TIME ACCOUNTING (A6)
@@ -1154,6 +1292,18 @@ E.2 LIVE SESSION (webrtc_session.LiveSession)
   live_sample_rate_hz, camera_black, time per stage.
   Sessions are kept in memory; one server process serves one or more
   sessions, each with its own analyzers (MediaPipe graphs are not shared).
+  Performance (PERF1): silero_vad/model.py calls torch.set_num_threads(1)
+  at import. That setting is process-wide, so after the first live
+  session started YOLO and L2CS ran on ONE thread: live video took ~2 s per
+  sample (reports: 0.36-0.64 samples/s instead of 3, video thread busy
+  93 s of a 96 s session) and persons / objects / gaze were checked only
+  every 2-3 s. audio/vad.py now restores the thread count after loading
+  Silero (tests/test_perf1_threads.py guards it). Measured on the real clip
+  with the audio analyzer running in parallel: 1080p 752 -> 440 ms per
+  sample (YOLO 429 -> 208, mesh + pose + L2CS 235 -> 154); at the live
+  640x360 size ~330 ms, i.e. about the 3 fps target. Limiting torch / TF /
+  OpenCV thread pools further did not help (~700 ms either way before the
+  fix), so the cause was the forced single thread, not over-subscription.
 
 E.3 RECORDED-VIDEO JOBS
   The uploaded file is saved to data/uploads/, analysed in a background

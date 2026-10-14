@@ -1,0 +1,47 @@
+{
+  "current_verify_thr": {
+    "thr": 0.72,
+    "heldout_FRR": 0.13142857142857142,
+    "heldout_FAR": 0.0072731755424063115,
+    "median_target": 0.8161647319793701,
+    "median_nontarget": 0.5430785417556763
+  },
+  "verify_adapt_None": {
+    "thr_cal_eer": 0.6595,
+    "heldout_FRR": 0.02857142857142857,
+    "heldout_FAR": 0.05695266272189349,
+    "median_target": 0.8161647319793701,
+    "median_nontarget": 0.5430785417556763
+  },
+  "verify_adapt_0.7": {
+    "thr_cal_eer": 0.7235,
+    "heldout_FRR": 0.022857142857142857,
+    "heldout_FAR": 0.03328402366863906,
+    "median_target": 0.8604044914245605,
+    "median_nontarget": 0.5851892530918121
+  },
+  "verify_adapt_0.75": {
+    "thr_cal_eer": 0.7135,
+    "heldout_FRR": 0.022857142857142857,
+    "heldout_FAR": 0.03796844181459566,
+    "median_target": 0.8541245460510254,
+    "median_nontarget": 0.5810343325138092
+  },
+  "verify_adapt_0.8": {
+    "thr_cal_eer": 0.6795,
+    "heldout_FRR": 0.022857142857142857,
+    "heldout_FAR": 0.07236193293885601,
+    "median_target": 0.8461325168609619,
+    "median_nontarget": 0.5711230635643005
+  },
+  "old_multi_rule_FA": 0.41228070175438597,
+  "new_multi_rule": {
+    "adapt_thr": 0.7,
+    "other_thr": 0.699,
+    "cal_FA": 0.0,
+    "cal_detection": 0.9636363636363636,
+    "heldout_FA": 0.0,
+    "heldout_detection": 0.9565217391304348,
+    "verify_thr": 0.7235
+  }
+}

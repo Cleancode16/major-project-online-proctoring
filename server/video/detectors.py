@@ -151,8 +151,30 @@ def count_persons(boxes, faces, frame_shape, pc):
     persons = [b for b in persons
                if not (any(_contains_centre(b["xyxy"], f) for f in static)
                        and not any(_contains_centre(b["xyxy"], f) for f in live))]
-    yolo_n = len(dedupe_persons(persons, pc["dedupe_iou"]))
+    persons = drop_attached(dedupe_persons(persons, pc["dedupe_iou"]), live, pc.get("attach_frac"))
+    yolo_n = len(persons)
     return max(yolo_n, len(live)), yolo_n
+
+
+def drop_attached(persons, faces, attach_frac):
+    """
+    DET2: a person box without a face whose area overlaps a face-bearing person box by >= attach_frac is the
+    same person's arm / hand / held object (live false positive: arm + blurred phone counted as a 2nd person).
+    A real second person at the frame edge does not overlap the candidate's box (6/6 such snapshots kept).
+    """
+    if not attach_frac:
+        return persons
+    with_face = [b for b in persons if any(_contains_centre(b["xyxy"], f) for f in faces)]
+    keep = []
+    for b in persons:
+        if b in with_face:
+            keep.append(b)
+            continue
+        a = _area(b["xyxy"])
+        if a > 0 and any(_inter(b["xyxy"], o["xyxy"]) >= attach_frac * a for o in with_face):
+            continue
+        keep.append(b)
+    return keep
 
 
 def objects_v2(boxes, obj_cfg, face_bbox=None):
@@ -171,7 +193,8 @@ def objects_v2(boxes, obj_cfg, face_bbox=None):
         cls = b["cls"]
         if cls not in obj_cfg["classes"]:
             continue
-        if face is not None and inside_thr and _inside_ratio(b["xyxy"], face) >= inside_thr:
+        if face is not None and inside_thr and _inside_ratio(b["xyxy"], face) >= inside_thr \
+                and b["conf"] < obj_cfg.get("ignore_inside_face_max_conf", 1.01):
             continue
         if b["conf"] >= obj_cfg["conf"][cls]:
             name = obj_cfg["classes"][cls]

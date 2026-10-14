@@ -52,6 +52,16 @@ def face_mesh(max_faces=1, static=False):
 
 
 @lru_cache(maxsize=None)
+def l2cs(weights, input_size=448, threads=None):
+    """GZ3 L2CS-Net gaze model (CPU), shared by all analyzers (inference only, no state)."""
+    from video.l2cs import L2CSGaze
+    path = config.ROOT / weights
+    if not path.exists():
+        raise FileNotFoundError(f"L2CS weights missing: {path} (run: python -m video.l2cs --download)")
+    return L2CSGaze(path, input_size, threads)
+
+
+@lru_cache(maxsize=None)
 def yolo(weights="yolov8n.pt"):
     from ultralytics import YOLO
     path = config.ROOT / weights

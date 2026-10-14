@@ -110,6 +110,7 @@ class LiveSession:
         self.next_t = 0.0
         self.busy = False
         self.brightness = []
+        self.light = deque(maxlen=200)
         k = samples_for(1.0, self.fps)
         self.vpers = {vt: LivePersistence(k) for _, vt, _ in VIDEO_MONITORS}
         self.vprev = {}
@@ -191,7 +192,7 @@ class LiveSession:
 
     def _process_video(self, img, t):
         if self.va is None:
-            self.va = VideoAnalyzer(self.face_embedding, self.cfg, self.fps)
+            self.va = VideoAnalyzer(self.face_embedding, self.cfg, self.fps, live=True)
         tp = time.perf_counter()
         s = self.va.process(img, t)
         self.timing["video_process"] += time.perf_counter() - tp
@@ -202,8 +203,22 @@ class LiveSession:
                 with self.lock:
                     self.warnings.add("camera_black")
 
+        lc = self.cfg.get("lighting", {})
+        if lc and s.get("brightness") is not None:        # DET2: live low-light warning (rolling mean)
+            self.light.append(s["brightness"])
+            n = samples_for(lc["window_s"], self.va.rate)
+            recent = list(self.light)[-n:]
+            with self.lock:
+                if len(recent) >= n and float(np.mean(recent)) < lc["low_mean"]:
+                    self.warnings.add("low_light")
+                else:
+                    self.warnings.discard("low_light")
+
         live = {}
         alerts = []
+        k = samples_for(1.0, self.va.rate)          # FPS10: 1 s debounce at the measured live rate
+        for p in self.vpers.values():
+            p.resize(k)
         for key, vtype, _ in VIDEO_MONITORS:
             on = self.vpers[vtype](bool(s["raw"].get(vtype, False)))
             live[vtype] = on

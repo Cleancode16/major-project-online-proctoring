@@ -75,6 +75,14 @@ def warm_models():
         models.facenet()
         models.embed_faces([np.zeros((160, 160, 3), np.uint8)])
         models.yolo(CFG["objects"]["weights"])
+        gz = CFG["gaze"]
+        if gz["method"] == "l2cs":                     # GZ3: L2CS-Net (CPU); a failure only means the fallback
+            try:
+                lc = gz["l2cs"]
+                for size in {lc["input_size"], lc.get("live_input_size", lc["input_size"])}:
+                    models.l2cs(lc["weights"], size, lc.get("torch_threads"))
+            except Exception as exc:
+                print(f">>> L2CS-Net gaze model not loaded ({exc}); sessions will use the {gz.get('fallback', 'v2')} gaze method")
         print(">>> Models loaded")
     except Exception:
         traceback.print_exc()

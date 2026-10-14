@@ -50,7 +50,8 @@ start-backend.ps1, start-frontend.ps1
 py -3.10 -m venv .venv
 .venv\Scripts\python.exe -m pip install --upgrade "pip<25"
 .venv\Scripts\python.exe -m pip install -r server\requirements.txt
-.venv\Scripts\python.exe -m pip install --no-deps Resemblyzer==0.1.4 silero-vad==6.2.3
+.venv\Scripts\python.exe -m pip install --no-deps Resemblyzer==0.1.4 silero-vad==6.2.3 mediapipe==0.10.21
+cd server; ..\.venv\Scripts\python.exe -m video.l2cs --download; cd ..   # L2CS-Net gaze weights (GZ3)
 ```
 
 `start-backend.ps1` does the same automatically if a package is missing. That includes `aiortc` (WebRTC), which is new in this version.

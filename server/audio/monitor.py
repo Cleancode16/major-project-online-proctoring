@@ -112,6 +112,8 @@ class AudioAnalyzer:
         self._tail_start = 0                   # absolute sample index of _tail[0]
         self.win_scores = []    # per window: 521 YAMNet scores
         self._live = True
+        self._live_embs = []    # VOICE2: live chunks that clearly match the enrollment (session print)
+        self._live_sp = None
 
     # ------------------------------------------------------------ input
     def feed(self, chunk):
@@ -141,10 +143,24 @@ class AudioAnalyzer:
         recent = self.vad.probs[-30:]
         st = {"speech_prob": float(max(recent)) if recent else 0.0, "categories": cats, "top": top,
               "t": round(self.n / SR, 2)}
-        if self.vp is not None and recent and max(recent) >= self.cfg["vad"]["start_threshold"]:
-            tail = self._tail[-int(self.cfg["speaker"]["chunk_s"] * SR):]
+        sc = self.cfg["speaker"]
+        n_fr = max(1, int(sc["chunk_s"] / self.vad.frame_s))
+        last = self.vad.probs[-n_fr:]
+        speech_frac = (sum(p >= self.cfg["vad"]["start_threshold"] for p in last) / len(last)) if last else 0.0
+        # VOICE2: only judge the voice when the last chunk is mostly speech (silence / noise lowered the similarity)
+        if self.vp is not None and len(last) >= n_fr and speech_frac >= sc.get("live_min_speech_frac", 0.0):
+            tail = self._tail[-int(sc["chunk_s"] * SR):]
             if len(tail) >= SR:
-                st["speaker_sim"] = round(speaker.similarity(speaker.embed(tail), self.vp), 3)
+                e = speaker.embed(tail)
+                sim = speaker.similarity(e, self.vp)
+                if sc.get("adapt_thr") is not None and sim >= sc["adapt_thr"]:
+                    self._live_embs.append(e)
+                    if len(self._live_embs) >= sc.get("adapt_min_chunks", 3):
+                        m = np.mean(self._live_embs[-50:], axis=0)
+                        self._live_sp = m / (np.linalg.norm(m) + 1e-12)
+                if self._live_sp is not None:
+                    sim = max(sim, speaker.similarity(e, self._live_sp))
+                st["speaker_sim"] = round(sim, 3)
         return st
 
     # ------------------------------------------------------------ analysis
@@ -223,7 +239,7 @@ class AudioAnalyzer:
     def _speaker_chunks(self, x, segs):
         sc = self.cfg["speaker"]
         L, hop = sc["chunk_s"], sc["chunk_s"] / 2
-        chunks = []
+        per_seg = []
         for si, (s, e) in enumerate(segs):
             seg_chunks = []
             t = s
@@ -235,14 +251,44 @@ class AudioAnalyzer:
                 if t1 >= e:
                     break
                 t += hop
-            if self.vp is not None and seg_chunks:
-                sims = np.array([float(np.dot(c["emb"], self.vp)) for c in seg_chunks])
-                p = np.pad(sims, 1, mode="edge") if len(sims) >= 3 and sc["smooth"] >= 3 else None
-                sm = np.median(np.stack([p[:-2], p[1:-1], p[2:]]), axis=0) if p is not None else sims
-                for c, r, m in zip(seg_chunks, sims, sm):
-                    c["sim"], c["sim_s"] = round(float(r), 3), round(float(m), 3)
-            chunks += seg_chunks
-        return chunks
+            per_seg.append(seg_chunks)
+        all_chunks = [c for sc_ in per_seg for c in sc_]
+        ref, sp = self._candidate_prints(all_chunks)
+        self.session_print_chunks = 0 if sp is None else int(sum(float(c["emb"] @ ref) >= sc["adapt_thr"]
+                                                                  for c in all_chunks))
+        if ref is not None:
+            for seg_chunks in per_seg:
+                if not seg_chunks:
+                    continue
+                raw = np.array([float(c["emb"] @ ref) for c in seg_chunks])
+                cand = np.maximum(raw, [float(c["emb"] @ sp) for c in seg_chunks]) if sp is not None else raw
+                p = np.pad(cand, 1, mode="edge") if len(cand) >= 3 and sc["smooth"] >= 3 else None
+                sm = np.median(np.stack([p[:-2], p[1:-1], p[2:]]), axis=0) if p is not None else cand
+                for c, r, cs, m in zip(seg_chunks, raw, cand, sm):
+                    c["sim_enroll"], c["sim"], c["sim_s"] = round(float(r), 3), round(float(cs), 3), round(float(m), 3)
+        return all_chunks
+
+    def _candidate_prints(self, chunks):
+        """
+        VOICE2: (reference, session print). Reference = enrollment voiceprint, or without one the session's
+        dominant voice (mean of all chunks). Session print = mean of the chunks that clearly match the reference
+        (>= adapt_thr, at least adapt_min_chunks of them): the candidate's voice as heard through the live channel.
+        """
+        sc = self.cfg["speaker"]
+        if not chunks:
+            return self.vp, None
+        embs = np.stack([c["emb"] for c in chunks])
+        ref = self.vp
+        if ref is None:
+            m = embs.mean(axis=0)
+            ref = m / (np.linalg.norm(m) + 1e-12)
+        if sc.get("adapt_thr") is None:
+            return ref, None
+        good = embs[embs @ ref >= sc["adapt_thr"]]
+        if len(good) < sc.get("adapt_min_chunks", 3):
+            return ref, None
+        m = good.mean(axis=0)
+        return ref, m / (np.linalg.norm(m) + 1e-12)
 
     def _raw_flags(self, windows, chunks):
         yc, sc, pol = self.cfg["yamnet"], self.cfg["speaker"], self.cfg["audio_policy"]
@@ -268,7 +314,27 @@ class AudioAnalyzer:
             if w["is_speech"]:
                 mid = (w["t_start"] + w["t_end"]) / 2
                 near = [c for c in chunks if abs((c["t0"] + c["t1"]) / 2 - mid) <= sc["multi_window_s"] / 2]
-                r[C.MULTIPLE_SPEAKERS] = self._conflict(near, mid)
+                if sc.get("multi_rule", "pairwise") == "foreign_run":
+                    r[C.MULTIPLE_SPEAKERS] = self._foreign_run(near, mid)
+                else:
+                    r[C.MULTIPLE_SPEAKERS] = self._conflict(near, mid)
+
+    def _foreign_run(self, near, mid):
+        """
+        VOICE2: another voice next to the candidate's = a run of >= other_run consecutive chunks whose candidate
+        similarity (sim_s: enrollment or session print, median-of-3) is below other_thr, plus at least one
+        candidate chunk (>= verify_thr) in the same window, and this window lies on / next to the foreign run.
+        """
+        sc = self.cfg["speaker"]
+        cs = sorted((c for c in near if c.get("sim_s") is not None), key=lambda c: c["t0"])
+        if len(cs) < sc["other_run"] + 1 or not any(c["sim_s"] >= sc["verify_thr"] for c in cs):
+            return False
+        run = []
+        for c in cs:
+            run = run + [c] if c["sim_s"] < sc["other_thr"] else []
+            if len(run) >= sc["other_run"] and run[0]["t0"] - 1.0 <= mid <= run[-1]["t1"] + 1.0:
+                return True
+        return False
 
     def _conflict(self, near, mid):
         sc = self.cfg["speaker"]

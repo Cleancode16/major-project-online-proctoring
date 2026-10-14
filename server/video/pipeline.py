@@ -5,6 +5,7 @@ Usage (offline):  result = analyze_video(path, ref_embedding, cfg)
 Usage (live):     va = VideoAnalyzer(ref, cfg, rate_hz); va.process(frame, t) ...; va.finalize()
 """
 
+import math
 import time
 from collections import deque
 
@@ -13,7 +14,7 @@ import numpy as np
 
 import config as C
 from video import detectors, face, gaze, head_pose, models
-from video.temporal import MajorityVote, RollingMedian, centered_median, filter_runs, samples_for
+from video.temporal import MajorityVote, RollingMedian, centered_mean, centered_median, filter_runs, samples_for
 
 
 def iter_sampled_frames(path, sampling):
@@ -54,11 +55,39 @@ def _iou_xywh(a, b):
     return inter / union if union > 0 else 0.0
 
 
-def promote_weak(strong, weak):
-    """OB2: a weak detection right next to (+-1 sample) a confident one counts as detected."""
+def promote_weak(strong, weak, reach=1):
+    """OB2: a weak detection within +-reach samples of a confident one counts as detected."""
     n = len(strong)
-    return [bool(strong[i] or (weak[i] and ((i > 0 and strong[i - 1]) or (i + 1 < n and strong[i + 1]))))
+    return [bool(strong[i] or (weak[i] and any(strong[j] for j in range(max(0, i - reach), min(n, i + reach + 1))
+                                               if j != i)))
             for i in range(n)]
+
+
+def windows(cfg, rate):
+    """
+    FPS10: every sample-count window derived from seconds at `rate`, so detection behaves the same at 3 or 10 fps
+    (and on a live stream whose real rate is lower than configured). A block without the *_s key (legacy profile)
+    keeps its old sample count.
+    """
+    hp, gz, fc, pc, oc = cfg["head_pose"], cfg["gaze"], cfg["face"], cfg["persons"], cfg["objects"]
+
+    def sec(block, key, count):
+        return samples_for(block[key], rate) if block.get(key) else count
+
+    w = {"pose_smooth": sec(hp, "smooth_s", hp["smooth_window"]),
+         "gaze_smooth": sec(gz, "smooth_s", gz["smooth_window"]),
+         "id_vote": sec(fc, "vote_s", fc["smooth_window"]),
+         "static_n": sec(pc, "static_s", pc.get("static_samples", 9)),
+         "person_gap": (int(round(pc["persist_gap_s"] * rate)) if pc.get("persist_gap_s") is not None
+                        else pc.get("persist_gap", 0)),
+         "weak_reach": max(1, int(round(oc["weak_reach_s"] * rate))) if oc.get("weak_reach_s") else 1}
+    if oc.get("persist_window_s"):
+        n = samples_for(oc["persist_window_s"], rate)
+        k = min(n, max(oc["persist_k"], int(math.ceil(oc.get("persist_frac", 0.0) * n - 1e-9))))
+    else:
+        n, k = oc["persist_n"], oc["persist_k"]
+    w["obj_n"], w["obj_k"] = n, k
+    return w
 
 
 def annotated_snapshot(frame, s, cfg, width=640):
@@ -103,10 +132,13 @@ def sample_rate(sampling, native_fps):
 
 
 class VideoAnalyzer:
-    def __init__(self, ref_embedding, cfg, rate_hz):
+    def __init__(self, ref_embedding, cfg, rate_hz, live=False):
         self.cfg = cfg
         self.ref = np.asarray(ref_embedding)
         self.rate = rate_hz
+        self.live = live
+        self.t_first = None
+        self.w = windows(cfg, rate_hz)        # FPS10: sample windows from seconds
         fc = cfg["face"]
         self.detector = models.face_detector(fc["det_confidence"])
         self.class_names = detectors.verify_class_ids(cfg["objects"])
@@ -119,10 +151,10 @@ class VideoAnalyzer:
         self.baseline = None
         self.processed = 0
         self.n_thumbs = 0
-        self.id_vote = MajorityVote(fc["smooth_window"])
+        self.id_vote = MajorityVote(self.w["id_vote"])
         hp, gz = cfg["head_pose"], cfg["gaze"]
-        self.sm = {k: RollingMedian(hp["smooth_window"]) for k in ("yaw", "pitch", "roll")}
-        self.sm_gaze = {k: RollingMedian(gz["smooth_window"]) for k in ("h", "v")}
+        self.sm = {k: RollingMedian(self.w["pose_smooth"]) for k in ("yaw", "pitch", "roll")}
+        self.sm_gaze = {k: RollingMedian(self.w["gaze_smooth"]) for k in ("h", "v")}
         # HP2 / GZ2 (flow.txt §A.5, §A.6 "Accuracy upgrade")
         self.use_template = hp.get("method") == "template"
         self.cal_pts, self.cal_any_pts = [], []
@@ -132,6 +164,18 @@ class VideoAnalyzer:
         self.live_pose_prev = False           # hysteresis state for the live (causal) flags
         self.live_gaze_prev = False
         self.face_tracks = []                 # MP2 static-face tracking
+        # GZ3: L2CS-Net gaze (falls back to gaze.fallback if torch / the weights are unavailable)
+        self.gaze_method, self.gaze_fallback, self.l2cs, self.ema_gaze = gz["method"], None, None, None
+        self.late_gaze = []                   # DET2: forward gaze collected after calibration if needed
+        if self.gaze_method == "l2cs":
+            lc = gz["l2cs"]
+            try:
+                size = lc.get("live_input_size", lc["input_size"]) if live else lc["input_size"]
+                self.l2cs = models.l2cs(lc["weights"], size, lc.get("torch_threads"))
+            except Exception as exc:
+                self.gaze_method = gz.get("fallback", "v2")
+                self.gaze_fallback = f"L2CS-Net gaze model not available ({exc}); used the {self.gaze_method} gaze method."
+                print(f">>> {self.gaze_fallback}")
 
     # ------------------------------------------------------------------ calibration
     def _calibrating(self):
@@ -150,7 +194,7 @@ class VideoAnalyzer:
         if accepted:
             for k, v in zip(("yaw", "pitch", "roll"), pose):
                 self.cal[k].append(v)
-            if gz is not None and gz.get("valid"):
+            if gz is not None and gz.get("valid") and self._gaze_cal_ok(gz):
                 self.cal["gaze_h"].append(gz["h"])
                 if gz.get("v") is not None:
                     self.cal["gaze_v"].append(gz["v"])
@@ -179,11 +223,15 @@ class VideoAnalyzer:
             if fallback:
                 src = {"yaw": [p[0] for p, _ in self.cal_any], "pitch": [p[1] for p, _ in self.cal_any],
                        "roll": [p[2] for p, _ in self.cal_any],
-                       "gaze_h": [g["h"] for _, g in self.cal_any if g and g.get("valid")],
-                       "gaze_v": [g["v"] for _, g in self.cal_any if g and g.get("valid") and g.get("v") is not None]}
+                       "gaze_h": [g["h"] for _, g in self.cal_any if g and g.get("valid") and self._gaze_cal_ok(g)],
+                       "gaze_v": [g["v"] for _, g in self.cal_any
+                                  if g and g.get("valid") and g.get("v") is not None and self._gaze_cal_ok(g)]}
             self.baseline = {k: float(agg(src[k])) for k in ("yaw", "pitch", "roll")}
-            self.baseline["gaze_h"] = float(agg(src["gaze_h"])) if src["gaze_h"] else None
-            self.baseline["gaze_v"] = float(agg(src["gaze_v"])) if src["gaze_v"] else None
+            n_min = self.cfg["gaze"].get("l2cs", {}).get("cal_min_samples", 1) if self.gaze_method == "l2cs" else 1
+            ok_g = len(src["gaze_h"]) >= n_min and len(src["gaze_v"]) >= n_min
+            self.baseline["gaze_h"] = float(agg(src["gaze_h"])) if ok_g else None
+            self.baseline["gaze_v"] = float(agg(src["gaze_v"])) if ok_g else None
+            self.baseline["gaze_samples"] = len(src["gaze_h"])
             self.baseline["n_samples"] = len(src["yaw"])
             self.baseline["n_seen"] = self.cal_seen
             self.baseline["t_end"] = t
@@ -196,11 +244,40 @@ class VideoAnalyzer:
             self.baseline["template_samples"] = len(point_sets) if self.template is not None else 0
         return accepted
 
+    def set_rate(self, rate):
+        """FPS10: new sample rate (live: measured) -> recompute the windows and resize the causal smoothers."""
+        self.rate = float(rate)
+        self.w = windows(self.cfg, self.rate)
+        self.id_vote.resize(self.w["id_vote"])
+        for sm in self.sm.values():
+            sm.resize(self.w["pose_smooth"])
+        for sm in self.sm_gaze.values():
+            sm.resize(self.w["gaze_smooth"])
+
+    def _track_live_rate(self, t):
+        """Live streams run below the configured rate when the CPU is the limit: follow the measured rate."""
+        if self.t_first is None:
+            self.t_first = t
+        if self.processed >= 5 and t > self.t_first:
+            measured = self.processed / (t - self.t_first)
+            if abs(measured - self.rate) > 0.15 * self.rate:
+                self.set_rate(measured)
+
+    def _gaze_cal_ok(self, gz):
+        """DET2: L2CS calibration gaze must be plausibly 'at the screen' (absolute angle gate)."""
+        if self.gaze_method != "l2cs":
+            return True
+        lc = self.cfg["gaze"]["l2cs"]
+        return (gz.get("h") is not None and gz.get("v") is not None
+                and abs(gz["h"]) <= lc.get("cal_max_abs_h", 1e9) and abs(gz["v"]) <= lc.get("cal_max_abs_v", 1e9))
+
     # ------------------------------------------------------------------ per frame
     def process(self, frame, t):
         """Analyse one sampled frame. Returns the sample dict, or None if the legacy profile skips it."""
         cfg, fc = self.cfg, self.cfg["face"]
         t_start = time.perf_counter()
+        if self.live:
+            self._track_live_rate(t)
         legacy_skip = not cfg["face_not_visible"]["enabled"]
         h, w = frame.shape[:2]
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -208,7 +285,8 @@ class VideoAnalyzer:
         faces = face.detect_faces(rgb, self.detector, clamp=fc["clamp_bbox"], min_face_px=fc["min_face_px"])
         self._mark_static_faces(faces)
         s = {"t": round(float(t), 3), "phase": "calibration" if self._calibrating() else "analysis",
-             "face_visible": bool(faces), "n_faces": len(faces), "raw": {}}
+             "face_visible": bool(faces), "n_faces": len(faces), "raw": {},
+             "brightness": round(float(cv2.resize(rgb, (64, 36)).mean()), 1)}       # DET2 low-light check
 
         identity_ok, pose, gz = None, None, None
         subject, match = self._select_subject(frame, faces)
@@ -240,10 +318,11 @@ class VideoAnalyzer:
         pts, rel_template = None, None
         if landmarks is not None:
             pose = head_pose.head_pose(landmarks, w, h, cfg["head_pose"]["euler"])
-            gz = self._gaze(landmarks, w, h)
+            gz = self._gaze(landmarks, w, h, frame, subject["bbox"])
             if pose is not None:
                 s.update(yaw=pose[0], pitch=pose[1], roll=pose[2])
-            s["gaze"] = {k: gz.get(k) for k in ("h", "v", "label", "valid")}
+            s["gaze"] = {k: gz.get(k) for k in ("h", "v", "label", "valid", "method", "yaw_deg", "pitch_deg")
+                         if k in gz}
             if self.use_template:
                 pts = head_pose.rigid_points(landmarks, w, h, cfg["head_pose"]["rigid_ids"])
                 if self.template is not None:
@@ -313,12 +392,22 @@ class VideoAnalyzer:
                 return None
         return best.landmark
 
-    def _gaze(self, landmarks, w, h):
+    def _gaze(self, landmarks, w, h, frame=None, bbox=None):
         gc = self.cfg["gaze"]
-        if gc["method"] == "legacy":
+        if self.gaze_method == "legacy":
             return gaze.gaze_legacy(landmarks, w, gc["legacy_low"], gc["legacy_high"])
-        return gaze.eye_ratios(landmarks, w, h, gc["blink_open_ratio"], vertical=gc.get("vertical", "lids"),
+        eyes = gaze.eye_ratios(landmarks, w, h, gc["blink_open_ratio"], vertical=gc.get("vertical", "lids"),
                                iris_mean=gc.get("iris_mean", False), weight_by_width=gc.get("weight_by_width", False))
+        if self.gaze_method != "l2cs":
+            return eyes
+        # GZ3: the landmarks still decide blinks / closed eyes; L2CS-Net gives the gaze angles
+        out = {"h": None, "v": None, "open": eyes["open"], "valid": False, "method": "l2cs"}
+        if not eyes["valid"] or bbox is None:
+            return out
+        r = self.l2cs.predict(frame, bbox, gc["l2cs"].get("crop_margin", 0.0))
+        if r is not None:
+            out.update(r, valid=True)
+        return out
 
     # ------------------------------------------------------------------ raw flags
     def _flag_identity(self, s, identity_ok):
@@ -373,7 +462,7 @@ class VideoAnalyzer:
 
     def _recompute_pose_offline(self):
         hp = self.cfg["head_pose"]
-        win = hp["smooth_window"]
+        win = self.w["pose_smooth"]
         if win <= 1 and not hp.get("hyst_deg"):
             return
         sm = {k: centered_median([s.get(k) for s in self.samples], win)
@@ -390,7 +479,10 @@ class VideoAnalyzer:
         if gz is None or not gz["valid"]:
             return
         gc = self.cfg["gaze"]
-        if gc["method"] == "legacy":
+        if self.gaze_method == "l2cs":
+            self._flag_gaze_l2cs(s, gz)
+            return
+        if self.gaze_method == "legacy":
             s["raw"][C.GAZE_AWAY] = gz["away_raw"]
             return
         if self.baseline is None or s["phase"] == "calibration":
@@ -408,6 +500,43 @@ class VideoAnalyzer:
         s["gaze"].update(label=label, gaze_h_deg=gh, gaze_v_deg=gv)
         s["raw"][C.GAZE_AWAY] = away
 
+    def _flag_gaze_l2cs(self, s, gz):
+        """GZ3: degrees vs the calibrated forward gaze, drift correction, EMA, +-threshold with hysteresis."""
+        gc = self.cfg["gaze"]
+        lc = gc["l2cs"]
+        if self.baseline is None or s["phase"] == "calibration":
+            return
+        if self.baseline.get("gaze_h") is None:
+            # DET2: no usable forward gaze from calibration -> collect it from frontal analysis samples first
+            hp = self.cfg["head_pose"]
+            frontal = abs(s.get("rel_yaw", 99)) < hp["yaw_thr"] / 2 and abs(s.get("rel_pitch", 99)) < hp["pitch_thr"] / 2
+            if frontal and self._gaze_cal_ok(gz):
+                self.late_gaze.append((gz["h"], gz["v"]))
+            if len(self.late_gaze) < max(lc.get("cal_min_samples", 3), 5):
+                return
+            hv = np.median(np.array(self.late_gaze), axis=0)
+            self.baseline.update(gaze_h=float(hv[0]), gaze_v=float(hv[1]), gaze_late=True, gaze_samples=len(self.late_gaze))
+        h0, v0 = self.baseline["gaze_h"], self.baseline["gaze_v"]
+        d = np.array([gz["h"] - h0, gz["v"] - v0], dtype=np.float64)
+        s["raw_gaze_dh"], s["raw_gaze_dv"] = float(d[0]), float(d[1])
+        dc = d - self.gaze_offset
+        tau = lc.get("adapt_tau_s")
+        if tau and abs(dc[0]) < lc["h_thr_deg"] / 2 and abs(dc[1]) < lc["v_thr_deg"] / 2:
+            self.gaze_offset = np.clip(self.gaze_offset + dc * min(1.0, (1.0 / self.rate) / tau),
+                                       -lc["adapt_max_deg"], lc["adapt_max_deg"])
+        s["gaze_dh"], s["gaze_dv"] = float(dc[0]), float(dc[1])
+        if lc.get("smoothing", "ema") == "ema":
+            a = lc["ema_alpha"]
+            self.ema_gaze = dc if self.ema_gaze is None else a * dc + (1 - a) * self.ema_gaze
+            sh, sv = self.ema_gaze
+        else:
+            sh, sv = self.sm_gaze["h"](s["gaze_dh"]), self.sm_gaze["v"](s["gaze_dv"])
+        away, label, gh, gv = gaze.gaze_decision_deg(float(sh), float(sv), s.get("rel_yaw"), s.get("rel_pitch"), lc,
+                                                     gc.get("camera_mirrored"), prev_away=self.live_gaze_prev)
+        self.live_gaze_prev = away
+        s["gaze"].update(label=label, gaze_h_deg=round(gh, 2), gaze_v_deg=round(gv, 2))
+        s["raw"][C.GAZE_AWAY] = away
+
     def _adapt_gaze(self, d):
         """GZ2 slow baseline adaptation of the iris offsets: only clearly centred samples, capped (flow.txt §A.6)."""
         gc = self.cfg["gaze"]
@@ -421,13 +550,16 @@ class VideoAnalyzer:
 
     def _recompute_gaze_offline(self):
         gc = self.cfg["gaze"]
-        if gc["method"] == "legacy" or (gc["smooth_window"] <= 1 and not gc.get("hyst_deg")):
+        if self.gaze_method == "l2cs":
+            self._recompute_gaze_l2cs_offline()
             return
-        win = gc["smooth_window"]
+        if self.gaze_method == "legacy" or (self.w["gaze_smooth"] <= 1 and not gc.get("hyst_deg")):
+            return
+        win = self.w["gaze_smooth"]
         dh = centered_median([s.get("gaze_dh") for s in self.samples], win)
         dv = centered_median([s.get("gaze_dv") for s in self.samples], win)
-        ry = centered_median([s.get("rel_yaw") for s in self.samples], self.cfg["head_pose"]["smooth_window"])
-        rp = centered_median([s.get("rel_pitch") for s in self.samples], self.cfg["head_pose"]["smooth_window"])
+        ry = centered_median([s.get("rel_yaw") for s in self.samples], self.w["pose_smooth"])
+        rp = centered_median([s.get("rel_pitch") for s in self.samples], self.w["pose_smooth"])
         prev = False
         for i, s in enumerate(self.samples):
             if C.GAZE_AWAY not in s["raw"] or np.isnan(dh[i]):
@@ -440,12 +572,33 @@ class VideoAnalyzer:
             s["raw"][C.GAZE_AWAY] = away
             s["gaze"].update(label=label, gaze_h_deg=float(gh), gaze_v_deg=float(gv))
 
+    def _recompute_gaze_l2cs_offline(self):
+        """GZ3 offline: centred moving average (zero lag) instead of the causal EMA, same decision rule."""
+        gc = self.cfg["gaze"]
+        lc = gc["l2cs"]
+        win = self.w["gaze_smooth"]
+        dh = centered_mean([s.get("gaze_dh") for s in self.samples], win)
+        dv = centered_mean([s.get("gaze_dv") for s in self.samples], win)
+        ry = centered_median([s.get("rel_yaw") for s in self.samples], self.w["pose_smooth"])
+        rp = centered_median([s.get("rel_pitch") for s in self.samples], self.w["pose_smooth"])
+        prev = False
+        for i, s in enumerate(self.samples):
+            if C.GAZE_AWAY not in s["raw"] or np.isnan(dh[i]) or np.isnan(dv[i]):
+                prev = False
+                continue
+            y = None if np.isnan(ry[i]) else ry[i]
+            p = None if np.isnan(rp[i]) else rp[i]
+            away, label, gh, gv = gaze.gaze_decision_deg(dh[i], dv[i], y, p, lc, gc.get("camera_mirrored"), prev_away=prev)
+            prev = away
+            s["raw"][C.GAZE_AWAY] = away
+            s["gaze"].update(label=label, gaze_h_deg=round(float(gh), 2), gaze_v_deg=round(float(gv), 2))
+
     def _mark_static_faces(self, faces):
         """MP2: track faces across samples; f["static"] = no micro-motion over the last static_samples (photo / poster)."""
         pc = self.cfg["persons"]
         if not pc.get("static_reject"):
             return
-        n, frac = pc["static_samples"], pc["static_frac"]
+        n, frac = self.w["static_n"], pc["static_frac"]
         tracks, used = [], set()
         for f in faces:
             best, best_iou = None, 0.3
@@ -493,21 +646,21 @@ class VideoAnalyzer:
     def finalize(self):
         """Apply offline persistence to the raw flags; return samples + calibration info."""
         cfg = self.cfg
+        self.w = windows(cfg, self.rate)      # FPS10: final rate (live: achieved rate set by the session)
         self._recompute_pose_offline()
         self._recompute_gaze_offline()
         persist = {
             C.IDENTITY_MISMATCH: (samples_for(cfg["face"]["persist_s"], self.rate), 0),
             C.HEAD_POSE_DEVIATION: (samples_for(cfg["head_pose"]["persist_s"], self.rate), 0),
             C.GAZE_AWAY: (samples_for(cfg["gaze"]["persist_s"], self.rate), 0),
-            C.MULTIPLE_PERSONS: (samples_for(cfg["persons"]["persist_s"], self.rate), cfg["persons"].get("persist_gap", 0)),
-            C.PROHIBITED_OBJECT: (cfg["objects"]["persist_k"],
-                                  cfg["objects"]["persist_n"] - cfg["objects"]["persist_k"]),
+            C.MULTIPLE_PERSONS: (samples_for(cfg["persons"]["persist_s"], self.rate), self.w["person_gap"]),
+            C.PROHIBITED_OBJECT: (self.w["obj_k"], self.w["obj_n"] - self.w["obj_k"]),
             C.FACE_NOT_VISIBLE: (samples_for(cfg["face_not_visible"]["persist_s"], self.rate), 0),
         }
         for vtype, (min_len, max_gap) in persist.items():
             raw = [s["raw"].get(vtype, False) for s in self.samples]
             if vtype == C.PROHIBITED_OBJECT and cfg["objects"].get("weak_conf"):
-                raw = promote_weak(raw, [s.get("object_weak", False) for s in self.samples])   # OB2
+                raw = promote_weak(raw, [s.get("object_weak", False) for s in self.samples], self.w["weak_reach"])  # OB2
             final = filter_runs(raw, min_len, max_gap)
             for s, f in zip(self.samples, final):
                 s.setdefault("flags", {})[vtype] = bool(f)
@@ -517,6 +670,8 @@ class VideoAnalyzer:
             "baseline": self.baseline,
             "calibration": {"accepted": len(self.cal["yaw"]), "seen": self.cal_seen,
                             "config": cfg["calibration"]},
+            "gaze_method": self.gaze_method,
+            "gaze_fallback": self.gaze_fallback,
         }
 
 

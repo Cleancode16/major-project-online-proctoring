@@ -46,7 +46,8 @@ V2 = {
     # §A.3 sampling
     "sampling": {
         "mode": "fps",          # "fps" = time based, "every_n" = frame index based
-        "fps": 3.0,             # samples per second of video
+        "fps": 10.0,            # FPS10: samples per second (user request; was 3). Live runs as fast as the CPU
+                                # allows up to this (newest-frame policy); windows below are in seconds
         "every_n": 10,          # only for mode "every_n"
         "max_samples": None,    # None = whole video
     },
@@ -68,7 +69,8 @@ V2 = {
         "yaw_thr": 15.0,
         "pitch_thr": 10.0,
         "roll_thr": 10.0,
-        "smooth_window": 3,     # median over last N samples (1 = off)
+        "smooth_window": 3,     # median over last N samples (1 = off); used only when smooth_s is None
+        "smooth_s": 1.0,        # FPS10: median window in seconds (= 3 samples at 3 fps, 10 at 10 fps)
         "persist_s": 1.0,       # deviation must last this long to count
         # HP2 (flow.txt §A.5 "Accuracy upgrade")
         "method": "template",   # "template" (person-specific 3D landmark alignment) or "pnp" (generic 6-point model)
@@ -80,7 +82,32 @@ V2 = {
     },
     # §A.6 gaze
     "gaze": {
-        "method": "v2",         # "v2" or "legacy"
+        "method": "l2cs",       # GZ3: "l2cs" (L2CS-Net, §A.6 "L2CS-Net gaze"), "v2" (iris landmarks) or "legacy"
+        "fallback": "v2",       # used when the L2CS model cannot be loaded (missing torch / weights)
+        # GZ3 L2CS-Net (ResNet50, Gaze360 weights, CPU only). Angles in degrees vs the calibrated forward gaze;
+        # the gaze already contains the head rotation, so no head pose is added.
+        "l2cs": {
+            "weights": "models/l2cs/l2cs_gaze360_resnet50.safetensors",
+            "input_size": 448,      # recorded videos: upstream training / demo size (~0.2-0.25 s per face on CPU)
+            "live_input_size": 224, # live WebRTC: ~65-80 ms per face so the 3 fps budget holds (Py-Feat uses 224)
+            "crop_margin": 0.0,     # face-detector box as in the upstream pipeline
+            "h_thr_deg": 15.0,      # starting threshold +-15 deg (spec); tune on real sessions
+            "v_thr_deg": 15.0,
+            "hyst_deg": 2.0,
+            "smoothing": "ema",     # "ema" (live) / centred moving average (offline); "median" = rolling median
+            "ema_alpha": 0.5,
+            "min_eye_deg": 0.0,     # > 0: also require this much eye-in-head angle (gaze - head pose)
+            "adapt_tau_s": 120.0,   # slow forward-gaze drift correction (only clearly centred samples)
+            "adapt_max_deg": 5.0,
+            "torch_threads": 4,
+            # DET2: forward-gaze calibration gate. A session calibrated on 2 samples read -48 deg as "forward",
+            # so every later look at the screen was "away" (98% GAZE_AWAY). Calibration gaze samples must lie
+            # within these absolute angles; with fewer than cal_min_samples the baseline is collected from the
+            # first frontal analysis samples instead (gaze not flagged until then).
+            "cal_max_abs_h": 25.0,
+            "cal_max_abs_v": 35.0,  # webcam above the screen: looking at the screen reads ~10-20 deg down
+            "cal_min_samples": 3,     # measured fastest on the dev CPU (12 threads): 4 -> 205 ms vs 8 -> 239 ms at 448
+        },
         "legacy_low": 0.35,
         "legacy_high": 0.65,
         "deg_per_ratio_h": 140.0,  # iris-ratio offset -> eye yaw (eyeball geometry, §A.6)
@@ -90,6 +117,7 @@ V2 = {
         "min_eye_deg": 8.0,        # eye itself must contribute this much
         "blink_open_ratio": 0.12,  # eye opening / eye width below = blink, skip
         "smooth_window": 3,
+        "smooth_s": 1.0,           # FPS10: smoothing window in seconds (overrides smooth_window)
         "persist_s": 1.0,
         "camera_mirrored": False,  # labels are from the candidate's view
         # GZ2 (flow.txt §A.6 "Accuracy upgrade")
@@ -109,7 +137,8 @@ V2 = {
         "metric": "cosine",        # "cosine" or "euclidean" (legacy)
         "cos_threshold": 0.415,    # LFW train max-accuracy threshold for margin 0.30 (§A.7)
         "euclid_threshold": 1.0,
-        "smooth_window": 5,        # majority vote over last N verified samples
+        "smooth_window": 5,        # majority vote over last N verified samples (if vote_s is None)
+        "vote_s": 1.6,             # FPS10: majority-vote window in seconds (= 5 samples at 3 fps)
         "persist_s": 2.0,
         "mesh_max_faces": 3,
         "mesh_must_match": True,   # mesh centre must lie inside the subject box (else no pose/gaze)
@@ -123,11 +152,16 @@ V2 = {
         "min_area_frac": 0.01,
         "persist_s": 1.0,
         # MP2 (flow.txt §A.8 "Accuracy upgrade")
-        "persist_gap": 1,          # bridge one missed sample inside a visit
+        "persist_gap": 1,          # bridge one missed sample inside a visit (if persist_gap_s is None)
+        "persist_gap_s": 0.33,     # FPS10: bridge misses up to this long (1 sample at 3 fps, 3 at 10 fps)
         "yolo_conf_low": 0.35,     # lower-confidence person boxes count only with a face inside
         "static_reject": True,     # ignore faces that do not move (photos / posters / screens)
-        "static_samples": 9,       # track length examined (3 s at 3 fps)
+        "static_samples": 9,       # track length examined (if static_s is None)
+        "static_s": 3.0,           # FPS10: track length examined in seconds
         "static_frac": 0.01,       # max std of centre / width, as a fraction of the face width
+        # DET2: a face-less YOLO person box overlapping a face-bearing person box by >= this share of its own
+        # area is part of that person (arm / hand holding a phone), not a second person (seen in a live session)
+        "attach_frac": 0.3,
     },
     # §A.9 objects
     "objects": {
@@ -139,14 +173,24 @@ V2 = {
         "conf": {67: 0.35, 73: 0.40, 63: 0.50, 62: 0.50},
         "model_names": {0: "person", 67: "cell phone", 73: "book", 63: "laptop", 62: "tv"},  # verified at start-up
         "legacy_conf": 0.4,
-        "persist_k": 2,            # detected in >= k of the last n samples
+        "persist_k": 2,            # detected in >= k of the last n samples (if persist_window_s is None)
         "persist_n": 3,
+        "persist_window_s": 1.0,   # FPS10: n = samples in this window, k = max(persist_k, ceil(persist_frac * n))
+        "persist_frac": 0.4,       #   -> 2 of 3 at 3 fps (as before), 4 of 10 at 10 fps
         "imgsz": 640,
         # OB2 (flow.txt §A.9b)
         "roi_pass": True,          # second YOLO pass on the hands / desk region around the face
         "roi_max_frac": 0.6,       # skip the ROI pass if the crop would cover more of the frame
         "weak_conf": 0.20,         # weak detections, promoted only next to a confident one
-        "ignore_inside_face": 0.8, # ignore object boxes lying this much inside the face box
+        "weak_reach_s": 0.33,      # FPS10: "next to" = within this time (1 sample at 3 fps, 3 at 10 fps)
+        "ignore_inside_face": 0.8, # ignore object boxes lying this much inside the face box ...
+        "ignore_inside_face_max_conf": 0.5,  # DET2: ... unless confident (a phone held up in front of the face)
+    },
+    # DET2: low light (mean grey level of the frame, 0-255). Dark frames lose phones / partial persons in YOLO.
+    "lighting": {
+        "low_mean": 60.0,          # below = low light warning (live + report)
+        "window_s": 3.0,           # live: mean over this many seconds
+        "report_frac": 0.3,        # report warning when >= this share of samples were dark
     },
     # §A.10 denominators / FACE_NOT_VISIBLE
     "face_not_visible": {
@@ -216,7 +260,20 @@ V2 = {
         "persist_s": 2.0,
         "multi_window_s": 10.0,
         "min_chunk_s": 1.5,        # VAD3: no speaker decision on shorter speech
-        "mix_margin": 0.05,        # VAD3: accepted/rejected mix needs this margin around verify_thr
+        "mix_margin": 0.05,        # VAD3: accepted/rejected mix needs this margin around verify_thr (pairwise rule)
+        # VOICE2 (flow.txt §B.5 "VOICE2", tests/calibrate_speaker_live.py: real speech through a simulated live
+        # channel - Opus 24/32 kbps, noise 12-30 dB, gain): the candidate's voice is compared with the enrollment
+        # print AND a session print (mean of this session's chunks with enrollment similarity >= adapt_thr), so the
+        # live channel does not turn the candidate into a "different" voice. Held-out: FRR 13.1% -> 2.3%.
+        "adapt_thr": 0.70,
+        "adapt_min_chunks": 3,
+        # MULTIPLE_SPEAKERS: old rule = any chunk pair < diff_thr within 10 s -> 41% false alarms on single-speaker
+        # windows under the live channel. New rule = a run of >= other_run consecutive chunks below other_thr
+        # (candidate similarity) next to candidate speech: 0% false alarms, 95.7% detection (held-out).
+        "multi_rule": "foreign_run",   # "foreign_run" (VOICE2) or "pairwise" (old)
+        "other_thr": 0.70,
+        "other_run": 3,            # chunks overlap by 50% -> 3 chunks = ~4 s of the other voice
+        "live_min_speech_frac": 0.7,   # live check only when >= 70% of the last chunk is speech
     },
     # §B.6 audio policy
     "audio_policy": {
@@ -249,7 +306,7 @@ V2 = {
         "invalid_score": 50.0,     # SC2: score is now a sum of points (was a weighted mean, 60 / 20)
         "suspicious_score": 15.0,
         "audio_silent_is_suspicious": True,
-        "max_thumbnails": 400,
+        "max_thumbnails": 1200,    # FPS10: 3x the samples (was 400 at 3 fps); ~640 px JPEGs in memory
     },
     # §C.5 / §C.6 evidence package, counters and upload (EV1)
     "evidence": {
@@ -278,14 +335,14 @@ LEGACY = copy.deepcopy(V2)
 LEGACY["sampling"].update(mode="every_n", every_n=10, max_samples=50)
 LEGACY["calibration"].update(mode="count", count=3, min_samples=3, aggregate="mean",
                              require_identity=False, max_abs_yaw=1e9, max_abs_pitch=1e9)
-LEGACY["head_pose"].update(euler="legacy", smooth_window=1, persist_s=0.0, method="pnp", hyst_deg=0.0,
+LEGACY["head_pose"].update(euler="legacy", smooth_window=1, smooth_s=None, persist_s=0.0, method="pnp", hyst_deg=0.0,
                            adapt_tau_s=None)
-LEGACY["gaze"].update(method="legacy", smooth_window=1, persist_s=0.0, hyst_deg=0.0, adapt_tau_s=None)
+LEGACY["gaze"].update(method="legacy", smooth_window=1, smooth_s=None, persist_s=0.0, hyst_deg=0.0, adapt_tau_s=None)
 LEGACY["face"].update(select="first", clamp_bbox=False, crop_margin=0.0, metric="euclidean",
-                      smooth_window=1, persist_s=0.0, mesh_max_faces=1, mesh_must_match=False,
+                      smooth_window=1, vote_s=None, persist_s=0.0, mesh_max_faces=1, mesh_must_match=False,
                       min_face_px=0)
-LEGACY["persons"].update(method="yolo", persist_s=0.0, persist_gap=0, static_reject=False)
-LEGACY["objects"].update(method="legacy", weights="yolov8n.pt", persist_k=1, persist_n=1, roi_pass=False,
+LEGACY["persons"].update(method="yolo", persist_s=0.0, persist_gap=0, persist_gap_s=None, static_reject=False)
+LEGACY["objects"].update(method="legacy", weights="yolov8n.pt", persist_k=1, persist_n=1, persist_window_s=None, roi_pass=False,
                          weak_conf=None, ignore_inside_face=None,
                          classes={67: "Cell Phone", 73: "Book", 63: "Laptop"},
                          conf={67: 0.35, 73: 0.40, 63: 0.50})

@@ -1,4 +1,4 @@
-"""Eye gaze from MediaPipe iris landmarks (flow.txt §A.6)."""
+"""Eye gaze from MediaPipe iris landmarks (flow.txt §A.6) and the L2CS-Net decision rule (GZ3, video/l2cs.py)."""
 
 import numpy as np
 
@@ -61,16 +61,33 @@ def gaze_decision(dh, dv, rel_yaw, rel_pitch, gc, prev_away=False):
     gaze_h, gaze_v = (rel_yaw or 0.0) + eye_yaw, (rel_pitch or 0.0) + eye_pitch
     away_h = abs(gaze_h) > gc["h_thr_deg"] - hyst and abs(eye_yaw) >= gc["min_eye_deg"]
     away_v = abs(gaze_v) > gc["v_thr_deg"] - hyst and abs(eye_pitch) >= gc["min_eye_deg"]
+    return away_h or away_v, _label(away_h, away_v, gaze_h, gaze_v, gc.get("camera_mirrored")), gaze_h, gaze_v
+
+
+def gaze_decision_deg(gaze_h, gaze_v, rel_yaw, rel_pitch, lc, mirrored=False, prev_away=False):
+    """
+    GZ3 (L2CS-Net): gaze_h / gaze_v are already full gaze angles (head + eyes) in degrees relative to the
+    calibrated forward gaze (> 0 = towards image right / down). Away when beyond +-h_thr / v_thr (hysteresis
+    lowers them by hyst_deg while away). Optional min_eye_deg: eye-in-head part (gaze - head pose) must reach it.
+    """
+    hyst = lc.get("hyst_deg", 0.0) if prev_away else 0.0
+    min_eye = lc.get("min_eye_deg", 0.0)
+    eye_h, eye_v = gaze_h - (rel_yaw or 0.0), gaze_v - (rel_pitch or 0.0)
+    away_h = abs(gaze_h) > lc["h_thr_deg"] - hyst and abs(eye_h) >= min_eye
+    away_v = abs(gaze_v) > lc["v_thr_deg"] - hyst and abs(eye_v) >= min_eye
+    return away_h or away_v, _label(away_h, away_v, gaze_h, gaze_v, mirrored), gaze_h, gaze_v
+
+
+def _label(away_h, away_v, gaze_h, gaze_v, mirrored):
+    """Direction from the candidate's view (camera not mirrored: image right = candidate's left)."""
     if away_h and (not away_v or abs(gaze_h) >= abs(gaze_v)):
         right_of_image = gaze_h > 0
-        if gc.get("camera_mirrored"):
+        if mirrored:
             right_of_image = not right_of_image
-        label = "Looking Left" if right_of_image else "Looking Right"
-    elif away_v:
-        label = "Looking Down" if gaze_v > 0 else "Looking Up"
-    else:
-        label = "Looking Center"
-    return away_h or away_v, label, gaze_h, gaze_v
+        return "Looking Left" if right_of_image else "Looking Right"
+    if away_v:
+        return "Looking Down" if gaze_v > 0 else "Looking Up"
+    return "Looking Center"
 
 
 def gaze_legacy(landmarks, w, low=0.35, high=0.65):

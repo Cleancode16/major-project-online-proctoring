@@ -32,6 +32,15 @@ def build_report(video, audio, cfg, meta=None):
         warnings.append("Head-pose/gaze baseline was not calibrated: pose and gaze were not evaluated.")
     elif video and video["baseline"].get("fallback"):
         warnings.append("Calibration used the fallback (no frontal, verified sample in the first 10 s).")
+    if video and video.get("gaze_fallback"):            # GZ3: L2CS-Net could not be loaded
+        warnings.append(video["gaze_fallback"])
+    if video and video.get("samples"):                  # DET2: dark video -> detections unreliable
+        lc = cfg.get("lighting", {})
+        br = [s["brightness"] for s in video["samples"] if s.get("brightness") is not None]
+        if br and lc and sum(b < lc["low_mean"] for b in br) >= lc["report_frac"] * len(br):
+            warnings.append(f"LOW_LIGHT: the camera image was dark (median brightness {float(np.median(br)):.0f}/255, "
+                            f"limit {lc['low_mean']:.0f}) in {100 * sum(b < lc['low_mean'] for b in br) / len(br):.0f}% "
+                            "of the samples; phones, partly visible persons and gaze are detected less reliably.")
     a_status = (audio or {}).get("status", "unavailable")
     if a_status != "ok":
         warnings.append({"unavailable": "AUDIO_UNAVAILABLE: no audio track / no microphone.",
@@ -53,7 +62,8 @@ def build_report(video, audio, cfg, meta=None):
         "timeline": core["timeline"],
         "video": None if not video else {
             **video.get("video", {}), "n_samples": len(video["samples"]), "sample_rate_hz": video["rate_hz"],
-            "baseline": video["baseline"], "calibration": video["calibration"]},
+            "baseline": video["baseline"], "calibration": video["calibration"],
+            "gaze_method": video.get("gaze_method")},
         "audio": None if audio is None else {k: audio.get(k) for k in
                                              ("status", "duration_s", "speech_s", "vad_engine", "voiceprint", "segments",
                                               "vad_rejected")},

@@ -21,6 +21,12 @@ class RollingMedian:
         self.buf.append(x)
         return float(np.median(self.buf))
 
+    def resize(self, n):
+        """FPS10: change the window (live sample rate re-estimated), keeping the newest values."""
+        n = max(1, int(n))
+        if n != self.buf.maxlen:
+            self.buf = deque(self.buf, maxlen=n)
+
 
 def centered_median(values, window):
     """Zero-lag (centred) median over a sequence that may contain None/NaN gaps (offline use)."""
@@ -36,6 +42,20 @@ def centered_median(values, window):
     return out
 
 
+def centered_mean(values, window):
+    """Zero-lag (centred) moving average over a sequence with None/NaN gaps (offline use, GZ3)."""
+    x = np.array([np.nan if v is None else float(v) for v in values], dtype=np.float64)
+    if window <= 1 or len(x) == 0:
+        return x
+    half = int(window) // 2
+    out = np.full_like(x, np.nan)
+    for i in range(len(x)):
+        if np.isnan(x[i]):
+            continue
+        out[i] = np.nanmean(x[max(0, i - half):i + half + 1])
+    return out
+
+
 class MajorityVote:
     """True when more than half of the last `n` booleans are True."""
 
@@ -45,6 +65,12 @@ class MajorityVote:
     def __call__(self, x):
         self.buf.append(bool(x))
         return sum(self.buf) * 2 > len(self.buf)
+
+    def resize(self, n):
+        """FPS10: change the window (live sample rate re-estimated), keeping the newest values."""
+        n = max(1, int(n))
+        if n != self.buf.maxlen:
+            self.buf = deque(self.buf, maxlen=n)
 
 
 class LivePersistence:
@@ -56,6 +82,12 @@ class LivePersistence:
     def __call__(self, x):
         self.buf.append(bool(x))
         return len(self.buf) == self.buf.maxlen and all(self.buf)
+
+    def resize(self, n):
+        """FPS10: change the window (live sample rate re-estimated), keeping the newest values."""
+        n = max(1, int(n))
+        if n != self.buf.maxlen:
+            self.buf = deque(self.buf, maxlen=n)
 
 
 def filter_runs(flags, min_len=1, max_gap=0):
