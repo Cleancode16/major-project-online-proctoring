@@ -32,7 +32,7 @@ VERDICT_STYLE = {
     "INVALID": (colors.HexColor("#fee2e2"), colors.HexColor("#991b1b"), "FAIL"),
 }
 GROUPS = [("head_pose", "Head pose movement"), ("multiple_faces", "Multiple faces"),
-          ("object", "Prohibited objects"), ("voice", "Voice violations")]
+          ("object", "Prohibited objects"), ("spoof", "Face spoofing"), ("voice", "Voice violations")]
 # evidence groups shown in the downloadable PDF / Word files: voice clips are audio only, so they are left out
 DOC_GROUPS = [(g, label) for g, label in GROUPS if g != "voice"]
 PAGE_W, PAGE_H = A4
@@ -288,6 +288,9 @@ def _caption(group, it):
     if group == "multiple_faces":
         return (f"{base}<br/>{it.get('face_count', '?')} face(s), {it.get('person_count', '?')} person(s), "
                 f"max {it.get('max_persons', '?')}")
+    if group == "spoof":
+        return (f"{base}<br/>real-face score {it.get('real_score', '-')}, min {it.get('min_real_score', '-')} "
+                f"(spoof below {it.get('real_threshold', '-')})")
     if group == "head_pose":
         a, lim = it.get("angles_deg", {}), it.get("allowed_deg", {})
         return (f"{base}<br/>yaw {a.get('yaw', '-')}, pitch {a.get('pitch', '-')}, roll {a.get('roll', '-')} deg "

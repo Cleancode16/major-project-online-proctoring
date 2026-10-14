@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import axios from 'axios';
 import {
   Play, Square, RotateCcw, Video, Upload, AlertTriangle, AlertCircle, Loader, Clock, Activity, FileVideo,
-  Mic, Smartphone, Users, MoveHorizontal, Ban,
+  Mic, Smartphone, Users, MoveHorizontal, Ban, ScanFace,
 } from 'lucide-react';
 import StatusIndicator from './StatusIndicator';
 import AlertPanel from './AlertPanel';
@@ -31,10 +31,11 @@ const EVIDENCE_GROUPS = [
   ['object', 'Objects', Smartphone],
   ['multiple_faces', 'Multiple faces', Users],
   ['head_pose', 'Head pose', MoveHorizontal],
+  ['spoof', 'Face spoofing', ScanFace],
 ];
 
 const EvidenceCounters = ({ evidence }) => (
-  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
     {EVIDENCE_GROUPS.map(([key, label, Icon]) => {
       const c = evidence?.[key] || { count: 0, threshold: '-', exceeded: false };
       return (

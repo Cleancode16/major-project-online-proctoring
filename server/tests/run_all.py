@@ -28,6 +28,7 @@ TESTS = [
     ("GZ3 L2CS-Net gaze", "tests.test_gz3_l2cs"),
     ("PERF1 torch thread count", "tests.test_perf1_threads"),
     ("DET2 persons / objects / gaze calibration", "tests.test_det2_persons_objects"),
+    ("FAS1 face anti-spoofing", "tests.test_fas1_antispoof"),
     ("VAD2/MP2/OB2 voice, persons, objects accuracy", "tests.test_vad2_mp2_ob2"),
     ("A1/A2 audio I/O + VAD", "tests.test_a1_a2_audio_vad"),
     ("A3 voice enrollment", "tests.test_a3_enrollment"),

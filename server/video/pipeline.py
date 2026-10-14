@@ -80,7 +80,8 @@ def windows(cfg, rate):
          "static_n": sec(pc, "static_s", pc.get("static_samples", 9)),
          "person_gap": (int(round(pc["persist_gap_s"] * rate)) if pc.get("persist_gap_s") is not None
                         else pc.get("persist_gap", 0)),
-         "weak_reach": max(1, int(round(oc["weak_reach_s"] * rate))) if oc.get("weak_reach_s") else 1}
+         "weak_reach": max(1, int(round(oc["weak_reach_s"] * rate))) if oc.get("weak_reach_s") else 1,
+         "spoof_win": samples_for(cfg.get("antispoof", {}).get("window_s", 1.0), rate)}
     if oc.get("persist_window_s"):
         n = samples_for(oc["persist_window_s"], rate)
         k = min(n, max(oc["persist_k"], int(math.ceil(oc.get("persist_frac", 0.0) * n - 1e-9))))
@@ -109,6 +110,10 @@ def annotated_snapshot(frame, s, cfg, width=640):
     for x, y, bw, bh in s.get("face_boxes", []):
         cv2.rectangle(img, (int(x * k), int(y * k)), (int((x + bw) * k), int((y + bh) * k)), (0, 170, 255), 2)
     lines = [f"t = {s['t']:.2f} s", f"faces: {s.get('n_faces', 0)}  persons: {s.get('persons', 0)}"]
+    if s.get("spoof_score") is not None:                    # FAS1
+        thr = cfg.get("antispoof", {}).get("real_thr", 0.5)
+        lines.append(f"liveness {s['spoof_score']:.2f} (mean {s.get('spoof_mean', s['spoof_score']):.2f}, "
+                     f"spoof below {thr:.2f})")
     if "rel_yaw" in s:
         hp = cfg["head_pose"]
         lines.append(f"dYaw {s['rel_yaw']:+.0f}  dPitch {s['rel_pitch']:+.0f}  dRoll {s['rel_roll']:+.0f} deg "
@@ -167,6 +172,16 @@ class VideoAnalyzer:
         # GZ3: L2CS-Net gaze (falls back to gaze.fallback if torch / the weights are unavailable)
         self.gaze_method, self.gaze_fallback, self.l2cs, self.ema_gaze = gz["method"], None, None, None
         self.late_gaze = []                   # DET2: forward gaze collected after calibration if needed
+        # FAS1: face anti-spoofing (MiniFASNet); a load failure disables it with a report warning
+        self.fas, self.fas_error = None, None
+        self.spoof_hist = deque(maxlen=self.w["spoof_win"])
+        ac = cfg.get("antispoof", {})
+        if ac.get("enabled"):
+            try:
+                self.fas = models.antispoof(ac["models_dir"])
+            except Exception as exc:
+                self.fas_error = f"Face anti-spoofing not available ({exc}); spoofing was not checked."
+                print(f">>> {self.fas_error}")
         if self.gaze_method == "l2cs":
             lc = gz["l2cs"]
             try:
@@ -253,6 +268,8 @@ class VideoAnalyzer:
             sm.resize(self.w["pose_smooth"])
         for sm in self.sm_gaze.values():
             sm.resize(self.w["gaze_smooth"])
+        if self.spoof_hist.maxlen != self.w["spoof_win"]:
+            self.spoof_hist = deque(self.spoof_hist, maxlen=self.w["spoof_win"])
 
     def _track_live_rate(self, t):
         """Live streams run below the configured rate when the CPU is the limit: follow the measured rate."""
@@ -336,6 +353,7 @@ class VideoAnalyzer:
 
         t_mesh = time.perf_counter()
         self._flag_identity(s, identity_ok)
+        self._flag_spoof(s, frame, subject)
         self._flag_pose(s, pose, rel_template)
         self._flag_gaze(s, gz, pose)
         self._flag_scene(s, frame, faces)
@@ -416,6 +434,29 @@ class VideoAnalyzer:
             return
         s["identity_ok"] = self.id_vote(identity_ok)
         s["raw"][C.IDENTITY_MISMATCH] = not s["identity_ok"]
+
+    def _flag_spoof(self, s, frame, subject):
+        """FAS1: real-face score of the candidate's face; spoof = mean over window_s below real_thr."""
+        if self.fas is None or subject is None or not s["face_visible"]:
+            return
+        score = self.fas.real_score(frame, subject["bbox"])
+        if score is None:
+            return
+        s["spoof_score"] = round(score, 3)
+        self.spoof_hist.append(score)
+        s["spoof_mean"] = round(float(np.mean(self.spoof_hist)), 3)
+        s["raw"][C.FACE_SPOOF] = s["spoof_mean"] < self.cfg["antispoof"]["real_thr"]
+
+    def _recompute_spoof_offline(self):
+        """FAS1 offline: centred mean over window_s (zero lag) instead of the causal live mean."""
+        if self.fas is None:
+            return
+        mean = centered_mean([s.get("spoof_score") for s in self.samples], self.w["spoof_win"])
+        thr = self.cfg["antispoof"]["real_thr"]
+        for s, m in zip(self.samples, mean):
+            if s.get("spoof_score") is not None and not np.isnan(m):
+                s["spoof_mean"] = round(float(m), 3)
+                s["raw"][C.FACE_SPOOF] = bool(m < thr)
 
     def _flag_pose(self, s, pose, rel_template=None):
         hp = self.cfg["head_pose"]
@@ -649,6 +690,7 @@ class VideoAnalyzer:
         self.w = windows(cfg, self.rate)      # FPS10: final rate (live: achieved rate set by the session)
         self._recompute_pose_offline()
         self._recompute_gaze_offline()
+        self._recompute_spoof_offline()
         persist = {
             C.IDENTITY_MISMATCH: (samples_for(cfg["face"]["persist_s"], self.rate), 0),
             C.HEAD_POSE_DEVIATION: (samples_for(cfg["head_pose"]["persist_s"], self.rate), 0),
@@ -656,6 +698,7 @@ class VideoAnalyzer:
             C.MULTIPLE_PERSONS: (samples_for(cfg["persons"]["persist_s"], self.rate), self.w["person_gap"]),
             C.PROHIBITED_OBJECT: (self.w["obj_k"], self.w["obj_n"] - self.w["obj_k"]),
             C.FACE_NOT_VISIBLE: (samples_for(cfg["face_not_visible"]["persist_s"], self.rate), 0),
+            C.FACE_SPOOF: (samples_for(cfg.get("antispoof", {}).get("persist_s", 2.0), self.rate), 0),
         }
         for vtype, (min_len, max_gap) in persist.items():
             raw = [s["raw"].get(vtype, False) for s in self.samples]
@@ -672,6 +715,8 @@ class VideoAnalyzer:
                             "config": cfg["calibration"]},
             "gaze_method": self.gaze_method,
             "gaze_fallback": self.gaze_fallback,
+            "antispoof": "minifasnet" if self.fas is not None else None,
+            "antispoof_error": self.fas_error,
         }
 
 

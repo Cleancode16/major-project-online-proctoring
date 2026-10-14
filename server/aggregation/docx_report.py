@@ -223,6 +223,9 @@ def _caption(group, it):
     if group == "multiple_faces":
         return (f"{base}\n{it.get('face_count', '?')} face(s), {it.get('person_count', '?')} person(s), "
                 f"max {it.get('max_persons', '?')}")
+    if group == "spoof":
+        return (f"{base}\nreal-face score {it.get('real_score', '-')}, min {it.get('min_real_score', '-')} "
+                f"(spoof below {it.get('real_threshold', '-')})")
     if group == "head_pose":
         a, lim = it.get("angles_deg", {}), it.get("allowed_deg", {})
         return (f"{base}\nyaw {a.get('yaw', '-')}, pitch {a.get('pitch', '-')}, roll {a.get('roll', '-')} deg "

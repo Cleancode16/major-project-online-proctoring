@@ -485,6 +485,39 @@ v2:
   reading (pose_ok = false) instead of describing the wrong person.
 
 
+A.7b FACE ANTI-SPOOFING (FAS1, user spec)
+  Model: MiniFASNet from minivision-ai/Silent-Face-Anti-Spoofing (Apache
+  2.0): MiniFASNetV2 (crop scale 2.7) + MiniFASNetV1SE (scale 4.0), 80x80,
+  PyTorch, CPU. Architecture code vendored unchanged in
+  video/minifasnet.py. Weights = the repository's
+  resources/anti_spoof_models/*.pth (git blob SHA-1 47c4af20... /
+  55a25b31... verified), loaded once with torch.load(weights_only=True)
+  and stored as .safetensors in server/models/antispoof/ (no pickle at run
+  time); python -m video.antispoof --download does the same on another
+  machine (start-backend.ps1 runs it when missing).
+  Per sample (video/antispoof.py, pipeline._flag_spoof), candidate face only
+  (the face selected for identity; MediaPipe detection box):
+    1. crop = upstream CropImage: scale x box around its centre, shifted
+       into the frame; resize 80x80; BGR; float WITHOUT /255 (upstream
+       to_tensor); both models' softmax summed; real score = sum[1] / 2.
+    2. temporal aggregation: mean of the real scores over antispoof.window_s
+       (1 s; centred mean in the final report, causal mean live);
+       raw FACE_SPOOF = mean < antispoof.real_thr (0.5).
+    3. persistence: the violation must last antispoof.persist_s (2 s).
+  Denominator: face-visible samples with a score. Severity critical, 40
+  points at 10% of samples; INVALID override at >= 20% or one event
+  >= 5 s; evidence group "spoof" (annotated snapshot with the liveness
+  score, real-face score / minimum / threshold in the item), session
+  limit "any detection" (count 0). Live monitor "Liveness", alert "spoof".
+  Measured real-face scores on the user's data: enrollment photos median
+  0.98 (min 0.74), live evidence snapshots median 0.99 (1 of 56 < 0.5),
+  sample clip 1080p median 0.87 (min 0.53); ~30 ms per face incl. detection.
+  No real attack recordings exist here, so attack recall is NOT measured:
+  hold a printed photo / a phone showing a face in front of the camera to
+  test it. Spoof types covered by the model's training: printed photos,
+  screen / video replays.
+
+
 A.8 MULTIPLE PERSONS (V7)
 -------------------------
 v1: YOLO person boxes with conf > 0.5 counted; > 1 = multiple. A person
@@ -939,6 +972,7 @@ C.2 VIOLATION SCORE (0-100, points per violation; SC2)
     score = min(100, sum(points_i))      (unmeasurable types score 0)
   type                severity   max points  saturation%
   IDENTITY_MISMATCH    critical      40          20
+  FACE_SPOOF           critical      40          10   (FAS1)
   MULTIPLE_PERSONS     critical      35          10
   PROHIBITED_OBJECT    critical      35          10
   VOICE_MISMATCH       critical      30          10
@@ -1092,6 +1126,7 @@ C.6 COUNTERS, SESSION VIOLATION, UPLOAD (EV1, LIM2)
                                      MULTIPLE_SPEAKERS or WHISPERING (union,
                                      overlaps counted once) x 0.48 s / audio s
     object          count     0      any prohibited-object event
+    spoof           count     0      any confirmed FACE_SPOOF event (FAS1)
   (evidence.limits in config.py; LIM1's event limits voice 5 /
   multiple_faces 5 became 5% each.) A group is EXCEEDED when its value is
   GREATER than the limit (so "up to" the limit is allowed).

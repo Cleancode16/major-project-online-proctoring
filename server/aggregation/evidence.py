@@ -23,9 +23,10 @@ GROUPS = {
     "object": [C.PROHIBITED_OBJECT],
     "multiple_faces": [C.MULTIPLE_PERSONS],
     "head_pose": [C.HEAD_POSE_DEVIATION],
+    "spoof": [C.FACE_SPOOF],                  # FAS1
 }
 GROUP_LABELS = {"voice": "Voice", "object": "Prohibited objects", "multiple_faces": "Multiple faces",
-                "head_pose": "Head pose"}
+                "head_pose": "Head pose", "spoof": "Face spoofing"}
 GROUP_OF = {t: g for g, types in GROUPS.items() for t in types}
 SR = 16000
 UPLOAD_DIR = C.DATA_DIR / "evidence_uploads"
@@ -40,6 +41,7 @@ PEAK_KEY = {
     "object": lambda s: max(s.get("objects", {}).values(), default=0.0),
     "multiple_faces": lambda s: (s.get("persons", 0), s.get("n_faces", 0)),
     "head_pose": _pose_peak,
+    "spoof": lambda s: 1.0 - (s.get("spoof_score") if s.get("spoof_score") is not None else 1.0),
 }
 
 
@@ -78,6 +80,12 @@ def _video_item(group, event, samples, cfg, folder, idx):
                                       for k in ("yaw", "pitch", "roll")}
         item["allowed_deg"] = {"yaw": hp["yaw_thr"], "pitch": hp["pitch_thr"], "roll": hp["roll_thr"]}
         item["allowed_duration_s"] = hp["persist_s"]
+    elif group == "spoof":                       # FAS1
+        ac = cfg.get("antispoof", {})
+        item["real_score"] = snap.get("spoof_score")
+        item["min_real_score"] = min((s["spoof_score"] for s in run if s.get("spoof_score") is not None), default=None)
+        item["real_threshold"] = ac.get("real_thr")
+        item["allowed_duration_s"] = ac.get("persist_s")
     return item
 
 

@@ -34,6 +34,8 @@ def build_report(video, audio, cfg, meta=None):
         warnings.append("Calibration used the fallback (no frontal, verified sample in the first 10 s).")
     if video and video.get("gaze_fallback"):            # GZ3: L2CS-Net could not be loaded
         warnings.append(video["gaze_fallback"])
+    if video and video.get("antispoof_error"):          # FAS1: anti-spoofing could not be loaded
+        warnings.append(video["antispoof_error"])
     if video and video.get("samples"):                  # DET2: dark video -> detections unreliable
         lc = cfg.get("lighting", {})
         br = [s["brightness"] for s in video["samples"] if s.get("brightness") is not None]
@@ -63,7 +65,7 @@ def build_report(video, audio, cfg, meta=None):
         "video": None if not video else {
             **video.get("video", {}), "n_samples": len(video["samples"]), "sample_rate_hz": video["rate_hz"],
             "baseline": video["baseline"], "calibration": video["calibration"],
-            "gaze_method": video.get("gaze_method")},
+            "gaze_method": video.get("gaze_method"), "antispoof": video.get("antispoof")},
         "audio": None if audio is None else {k: audio.get(k) for k in
                                              ("status", "duration_s", "speech_s", "vad_engine", "voiceprint", "segments",
                                               "vad_rejected")},

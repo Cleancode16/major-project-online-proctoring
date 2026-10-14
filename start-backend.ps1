@@ -101,6 +101,18 @@ if (-not (Test-Path $l2csWeights)) {
     }
 }
 
+# FAS1: MiniFASNet anti-spoofing weights (downloaded, SHA-1 checked, converted to .safetensors)
+$fasDir = Join-Path $serverDir "modelsntispoof"
+if (-not (Test-Path (Join-Path $fasDir "2.7_80x80_MiniFASNetV2.safetensors"))) {
+    Write-Host "[INFO] Downloading MiniFASNet anti-spoofing weights (~4 MB)..." -ForegroundColor Yellow
+    Push-Location $serverDir
+    & $venvPython -m video.antispoof --download
+    Pop-Location
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "[WARN] Anti-spoofing weights not downloaded; spoofing will not be checked." -ForegroundColor Yellow
+    }
+}
+
 # Start server banner
 Write-Host "[INFO] Starting backend server..." -ForegroundColor Green
 Write-Host "   Server will run on http://localhost:5000" -ForegroundColor Cyan

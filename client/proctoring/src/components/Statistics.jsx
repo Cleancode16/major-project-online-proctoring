@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import {
   ShieldCheck, Flag, Ban, Download, RotateCcw, Play, AlertTriangle, TrendingUp, Clock, Mic, ListChecks,
-  Image as ImageIcon, Table2, GanttChartSquare, Smartphone, Users, MoveHorizontal, UploadCloud, FileText, Gauge,
+  Image as ImageIcon, Table2, GanttChartSquare, Smartphone, Users, MoveHorizontal, UploadCloud, FileText, Gauge, ScanFace,
 } from 'lucide-react';
 
 // Results report (flow.txt PART II-D, D.3). Input: the report JSON built by server/aggregation/report.py.
@@ -130,12 +130,13 @@ const Timeline = ({ events, duration }) => {
 };
 
 // Evidence groups (flow.txt §C.5): voice clips, object / multiple-face / head-pose snapshots, each sorted by time
-const EVIDENCE_ORDER = ['voice', 'object', 'multiple_faces', 'head_pose'];
+const EVIDENCE_ORDER = ['voice', 'object', 'multiple_faces', 'spoof', 'head_pose'];
 const GROUP_META = {
   voice: { label: 'Voice violations', Icon: Mic },
   object: { label: 'Prohibited objects', Icon: Smartphone },
   multiple_faces: { label: 'Multiple faces', Icon: Users },
   head_pose: { label: 'Head pose movement', Icon: MoveHorizontal },
+  spoof: { label: 'Face spoofing', Icon: ScanFace },
 };
 const fmtT = (s) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${(s % 60).toFixed(1).padStart(4, '0')}`;
 
@@ -151,6 +152,9 @@ const itemDetails = (group, it) => {
       return `yaw ${a.yaw ?? '-'}°, pitch ${a.pitch ?? '-'}°, roll ${a.roll ?? '-'}° (limits ${lim.yaw}/${lim.pitch}/${lim.roll}°) · ` +
         `${it.duration_s.toFixed(1)} s (allowed ${it.allowed_duration_s} s)`;
     }
+    case 'spoof':
+      return `real-face score ${it.real_score ?? '-'} (min ${it.min_real_score ?? '-'}, spoof below ${it.real_threshold ?? '-'}) · ` +
+        `${it.duration_s.toFixed(1)} s (allowed ${it.allowed_duration_s ?? '-'} s)`;
     case 'voice':
       return [(it.types || [it.type]).map(nice).join(' + '),
         it.speaker_similarity_min != null ? `voice similarity ${it.speaker_similarity_min.toFixed(2)} (threshold ${it.speaker_threshold})` : null,

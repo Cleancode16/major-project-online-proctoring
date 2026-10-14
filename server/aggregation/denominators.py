@@ -7,7 +7,7 @@ measurable on it. Only pose and gaze need the calibration baseline, so only they
 
 import config as C
 
-FACE_DEPENDENT = {C.IDENTITY_MISMATCH, C.HEAD_POSE_DEVIATION, C.GAZE_AWAY}
+FACE_DEPENDENT = {C.IDENTITY_MISMATCH, C.HEAD_POSE_DEVIATION, C.GAZE_AWAY, C.FACE_SPOOF}
 NEEDS_BASELINE = {C.HEAD_POSE_DEVIATION, C.GAZE_AWAY}
 
 
@@ -23,4 +23,6 @@ def counts_toward(sample, vtype, include_calibration=False):
         return sample.get("pose_ok", True) and "rel_yaw" in sample
     if vtype == C.GAZE_AWAY:
         return C.GAZE_AWAY in sample.get("raw", {})
+    if vtype == C.FACE_SPOOF:                       # FAS1: samples where the anti-spoof model scored the face
+        return sample.get("spoof_score") is not None
     return sample.get("identity_ok") is not None

@@ -29,6 +29,7 @@ GAZE_AWAY = "GAZE_AWAY"
 MULTIPLE_PERSONS = "MULTIPLE_PERSONS"
 PROHIBITED_OBJECT = "PROHIBITED_OBJECT"
 FACE_NOT_VISIBLE = "FACE_NOT_VISIBLE"
+FACE_SPOOF = "FACE_SPOOF"                 # FAS1: photo / screen-replay presentation attack (MiniFASNet)
 SPEECH_DETECTED = "SPEECH_DETECTED"
 VOICE_MISMATCH = "VOICE_MISMATCH"
 MULTIPLE_SPEAKERS = "MULTIPLE_SPEAKERS"
@@ -36,7 +37,7 @@ WHISPERING = "WHISPERING"
 SUSPICIOUS_SOUND = "SUSPICIOUS_SOUND"
 
 VIDEO_TYPES = [IDENTITY_MISMATCH, HEAD_POSE_DEVIATION, GAZE_AWAY,
-               MULTIPLE_PERSONS, PROHIBITED_OBJECT, FACE_NOT_VISIBLE]
+               MULTIPLE_PERSONS, PROHIBITED_OBJECT, FACE_NOT_VISIBLE, FACE_SPOOF]
 AUDIO_TYPES = [SPEECH_DETECTED, VOICE_MISMATCH, MULTIPLE_SPEAKERS,
                WHISPERING, SUSPICIOUS_SOUND]
 ALL_TYPES = VIDEO_TYPES + AUDIO_TYPES
@@ -197,6 +198,16 @@ V2 = {
         "enabled": True,
         "persist_s": 2.0,
     },
+    # FAS1 face anti-spoofing (flow.txt §A.7b): MiniFASNetV2 + MiniFASNetV1SE on the candidate's face, CPU.
+    # Decision = confidence threshold on the real-face score + temporal aggregation (mean over window_s, then the
+    # violation must last persist_s). Real faces in the user's data: median 0.87-0.99, 1 of 56 live snapshots < 0.5.
+    "antispoof": {
+        "enabled": True,
+        "models_dir": "models/antispoof",
+        "real_thr": 0.5,           # mean real-face score below this = spoof
+        "window_s": 1.0,           # temporal aggregation (mean of the per-frame scores)
+        "persist_s": 2.0,          # spoof must last this long to count
+    },
     # §B.1 audio sources
     "audio": {
         "sr": 16000,
@@ -288,17 +299,21 @@ V2 = {
         # critical = heavy (persons, objects, identity, voice); head pose low; gaze lowest (user decision)
         "severity": {IDENTITY_MISMATCH: "critical", MULTIPLE_PERSONS: "critical", PROHIBITED_OBJECT: "critical",
                      VOICE_MISMATCH: "critical", MULTIPLE_SPEAKERS: "critical", WHISPERING: "critical",
+                     FACE_SPOOF: "critical",
                      FACE_NOT_VISIBLE: "medium", HEAD_POSE_DEVIATION: "low", SPEECH_DETECTED: "low",
                      SUSPICIOUS_SOUND: "low", GAZE_AWAY: "very low"},
-        "max_points": {IDENTITY_MISMATCH: 40, MULTIPLE_PERSONS: 35, PROHIBITED_OBJECT: 35, VOICE_MISMATCH: 30,
+        "max_points": {IDENTITY_MISMATCH: 40, FACE_SPOOF: 40, MULTIPLE_PERSONS: 35, PROHIBITED_OBJECT: 35,
+                       VOICE_MISMATCH: 30,
                        MULTIPLE_SPEAKERS: 30, WHISPERING: 20, FACE_NOT_VISIBLE: 12, HEAD_POSE_DEVIATION: 10,
                        SPEECH_DETECTED: 6, SUSPICIOUS_SOUND: 6, GAZE_AWAY: 4},
         "critical_floor": 0.5,     # a critical violation that occurs at all scores at least this share of its max
-        "saturation_pct": {IDENTITY_MISMATCH: 20, MULTIPLE_PERSONS: 10, PROHIBITED_OBJECT: 10, VOICE_MISMATCH: 10,
+        "saturation_pct": {IDENTITY_MISMATCH: 20, FACE_SPOOF: 10, MULTIPLE_PERSONS: 10, PROHIBITED_OBJECT: 10,
+                           VOICE_MISMATCH: 10,
                            MULTIPLE_SPEAKERS: 10, WHISPERING: 10, FACE_NOT_VISIBLE: 20, HEAD_POSE_DEVIATION: 25,
                            SPEECH_DETECTED: 20, SUSPICIOUS_SOUND: 20, GAZE_AWAY: 30},
         # critical overrides -> INVALID: (percentage threshold, minimum single-event seconds), priority order
         "critical": [(IDENTITY_MISMATCH, 50.0, 10.0, "Unauthorized person detected"),
+                     (FACE_SPOOF, 20.0, 5.0, "Face spoofing detected (photo or screen instead of a live face)"),
                      (MULTIPLE_PERSONS, 20.0, 3.0, "Multiple persons detected"),
                      (PROHIBITED_OBJECT, 15.0, 3.0, "Prohibited object detected"),
                      (VOICE_MISMATCH, 10.0, 5.0, "Voice does not match the enrolled candidate"),
@@ -316,7 +331,8 @@ V2 = {
         "limits": {"head_pose": {"basis": "percent", "value": 25.0},
                    "multiple_faces": {"basis": "percent", "value": 5.0},
                    "voice": {"basis": "percent", "value": 5.0},
-                   "object": {"basis": "count", "value": 0}},
+                   "object": {"basis": "count", "value": 0},
+                   "spoof": {"basis": "count", "value": 0}},     # FAS1: any confirmed spoof event
         "clip_pad_s": 0.5,     # audio clip = event +- pad
         "clip_max_s": 30.0,
         "voice_merge_gap_s": 1.0,  # overlapping / adjacent voice violations -> one evidence item
@@ -347,6 +363,7 @@ LEGACY["objects"].update(method="legacy", weights="yolov8n.pt", persist_k=1, per
                          classes={67: "Cell Phone", 73: "Book", 63: "Laptop"},
                          conf={67: 0.35, 73: 0.40, 63: 0.50})
 LEGACY["face_not_visible"].update(enabled=False)
+LEGACY["antispoof"].update(enabled=False)
 LEGACY["aggregation"].update(include_calibration_in_numerator=True, verdict="legacy")
 
 PROFILES = {"v2": V2, "legacy": LEGACY}

@@ -36,6 +36,8 @@ def _video_peak(s, vtype):
         return max(s.get("objects", {}).values(), default=None)
     if vtype == C.MULTIPLE_PERSONS:
         return s.get("persons")
+    if vtype == C.FACE_SPOOF:
+        return None if s.get("spoof_score") is None else round(1 - s["spoof_score"], 3)
     if vtype == C.HEAD_POSE_DEVIATION and "rel_yaw" in s:
         return round(max(abs(s["rel_yaw"]), abs(s["rel_pitch"]), abs(s["rel_roll"])), 1)
     return None
@@ -54,6 +56,9 @@ def _video_details(samples, idx, vtype):
     if vtype == C.HEAD_POSE_DEVIATION:
         keys = ("rel_yaw", "rel_pitch", "rel_roll")
         return {k: round(max((s[k] for s in ss if k in s), key=abs), 1) for k in keys if any(k in s for s in ss)}
+    if vtype == C.FACE_SPOOF:
+        sc = [s["spoof_score"] for s in ss if s.get("spoof_score") is not None]
+        return {"min_real_score": round(min(sc), 3) if sc else None}
     if vtype == C.GAZE_AWAY:
         labels = [s["gaze"]["label"] for s in ss if s.get("gaze")]
         return {"direction": max(set(labels), key=labels.count) if labels else None}
@@ -123,7 +128,7 @@ def score_and_verdict(stats, audio, cfg):
     else:
         expl = "Overall score 0 / 100: no violation scored any points. "
     expl += (f"Score >= {ac['invalid_score']:.0f} -> INVALID, >= {ac['suspicious_score']:.0f} -> SUSPICIOUS; "
-             "critical violations (multiple persons, prohibited objects, identity, voice) weigh most, "
+             "critical violations (multiple persons, prohibited objects, identity, face spoofing, voice) weigh most, "
              "head pose little and eye gaze least.")
 
     reasons = []
@@ -160,7 +165,7 @@ def group_percentages(stats, audio):
     """% of the analysed session per evidence group (LIM2, flow.txt §C.6)."""
     pct = lambda t: stats[t]["percentage"] if t in stats and stats[t]["measurable"] else 0.0  # noqa: E731
     out = {"head_pose": pct(C.HEAD_POSE_DEVIATION), "multiple_faces": pct(C.MULTIPLE_PERSONS),
-           "object": pct(C.PROHIBITED_OBJECT), "voice": 0.0}
+           "object": pct(C.PROHIBITED_OBJECT), "spoof": pct(C.FACE_SPOOF), "voice": 0.0}
     if audio is not None and audio.get("status") == "ok" and audio.get("duration_s"):
         vtypes = [t for t in (C.VOICE_MISMATCH, C.MULTIPLE_SPEAKERS, C.WHISPERING) if stats.get(t, {}).get("measurable")]
         n = sum(1 for w in audio["windows"] if any(w.get("flags", {}).get(t) for t in vtypes))  # union, no double count

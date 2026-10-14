@@ -11,11 +11,13 @@ const TITLES = {
   voice: 'Voice Mismatch',
   sound: 'Suspicious Sound',
   whisper: 'Whispering',
+  spoof: 'Face Spoofing',
 };
-const CRITICAL = ['identity', 'person', 'object', 'voice'];
+const CRITICAL = ['identity', 'person', 'object', 'voice', 'spoof'];
 
 const ICONS = {
   identity: User, gaze: Eye, person: Users, object: Package, face: EyeOff, voice: UserX, whisper: Mic, sound: Volume2,
+  spoof: ShieldAlert,
 };
 
 const COLORS = {

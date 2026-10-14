@@ -40,10 +40,12 @@ VIDEO_MONITORS = [
     ("person", C.MULTIPLE_PERSONS, "Persons"),
     ("object", C.PROHIBITED_OBJECT, "Objects"),
     ("face", C.FACE_NOT_VISIBLE, "Face visible"),
+    ("spoof", C.FACE_SPOOF, "Liveness"),          # FAS1
 ]
 
 # live alert key -> evidence group (flow.txt §C.6); final counts come from the report
-ALERT_GROUP = {"object": "object", "person": "multiple_faces", "pose": "head_pose", "voice": "voice", "whisper": "voice"}
+ALERT_GROUP = {"object": "object", "person": "multiple_faces", "pose": "head_pose", "voice": "voice", "whisper": "voice",
+               "spoof": "spoof"}
 
 ALERT_TEXT = {
     "identity": "Face does not match the enrolled candidate",
@@ -52,6 +54,7 @@ ALERT_TEXT = {
     "person": "More than one person in view",
     "object": "Prohibited object in view",
     "face": "Face not visible",
+    "spoof": "Face looks like a photo or a screen (spoofing)",
     "voice": "Voice does not match the enrolled candidate",
     "sound": "Suspicious sound",
     "whisper": "Whispering detected",
@@ -72,6 +75,8 @@ def _sample_details(s):
         C.MULTIPLE_PERSONS: f"{s.get('persons', 0)} person(s)",
         C.PROHIBITED_OBJECT: ", ".join(s.get("objects", {})) or "none",
         C.FACE_NOT_VISIBLE: "visible" if s.get("face_visible") else "not visible",
+        C.FACE_SPOOF: (f"real-face score {s['spoof_score']:.2f}" if s.get("spoof_score") is not None
+                       else "not measured"),
     }
 
 
@@ -123,7 +128,7 @@ class LiveSession:
         self.counts = {}
         # live session shares for the evidence limits (LIM2): flagged / analysed samples, flagged / audio ticks
         self.vn = self.vn_analysis = 0
-        self.von = {C.HEAD_POSE_DEVIATION: 0, C.MULTIPLE_PERSONS: 0, C.PROHIBITED_OBJECT: 0}
+        self.von = {C.HEAD_POSE_DEVIATION: 0, C.MULTIPLE_PERSONS: 0, C.PROHIBITED_OBJECT: 0, C.FACE_SPOOF: 0}
         self.aticks = self.avoice = 0
         self.warnings = set()
         self.pending_alerts = deque(maxlen=50)
@@ -266,6 +271,7 @@ class LiveSession:
             return {"head_pose": f(self.von[C.HEAD_POSE_DEVIATION], self.vn_analysis),
                     "multiple_faces": f(self.von[C.MULTIPLE_PERSONS], self.vn),
                     "object": f(self.von[C.PROHIBITED_OBJECT], self.vn),
+                    "spoof": f(self.von[C.FACE_SPOOF], self.vn),
                     "voice": f(self.avoice, self.aticks)}
 
     # ------------------------------------------------------------------ audio

@@ -62,6 +62,16 @@ def l2cs(weights, input_size=448, threads=None):
 
 
 @lru_cache(maxsize=None)
+def antispoof(models_dir="models/antispoof"):
+    """FAS1 MiniFASNet pair (CPU), shared by all analyzers (inference only)."""
+    from video.antispoof import AntiSpoof
+    path = config.ROOT / models_dir
+    if not path.exists():
+        raise FileNotFoundError(f"anti-spoofing weights missing: {path} (run: python -m video.antispoof --download)")
+    return AntiSpoof(path)
+
+
+@lru_cache(maxsize=None)
 def yolo(weights="yolov8n.pt"):
     from ultralytics import YOLO
     path = config.ROOT / weights

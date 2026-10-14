@@ -83,6 +83,11 @@ def warm_models():
                     models.l2cs(lc["weights"], size, lc.get("torch_threads"))
             except Exception as exc:
                 print(f">>> L2CS-Net gaze model not loaded ({exc}); sessions will use the {gz.get('fallback', 'v2')} gaze method")
+        if CFG.get("antispoof", {}).get("enabled"):     # FAS1
+            try:
+                models.antispoof(CFG["antispoof"]["models_dir"])
+            except Exception as exc:
+                print(f">>> Face anti-spoofing not loaded ({exc})")
         print(">>> Models loaded")
     except Exception:
         traceback.print_exc()
