@@ -22,6 +22,7 @@ const STATE_WORD = { ok: 'OK', warn: 'check', bad: 'VIOLATION', na: 'n/a' };
 const WARNING_TEXT = {
   camera_black: 'The camera image is black: the lens may be covered, a privacy shutter closed, or camera access blocked (Windows Settings > Privacy & security > Camera).',
   mic_silent: 'The microphone is silent: it may be muted or blocked (Windows Settings > Privacy & security > Microphone). Audio cannot be monitored.',
+  low_light: 'The room is too dark: turn on a light in front of you. Phones, other persons and eye gaze are detected less reliably in a dark image.',
 };
 
 // Evidence groups (flow.txt §C.5/§C.6): live counters vs configured thresholds
