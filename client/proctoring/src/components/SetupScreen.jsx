@@ -3,8 +3,10 @@ import Webcam from 'react-webcam';
 import axios from 'axios';
 import {
   Camera, CheckCircle, AlertCircle, Upload, Mic, Square, RefreshCw, ShieldCheck, AlertTriangle, Loader, Check,
-  History, Image as ImageIcon, Sun, User as UserIcon, RotateCcw, ArrowRight,
+  History, Image as ImageIcon, Sun, User as UserIcon, RotateCcw, ArrowRight, Camera as CameraIcon,
 } from 'lucide-react';
+import { SkeletonText } from './ui/Skeleton';
+import EmptyState from './ui/EmptyState';
 
 // Enrollment (flow.txt PART II-D, D.1): consent -> reference photo -> voice reading -> continue.
 // All requests go to the local Python server through the Vite /api proxy.
@@ -230,19 +232,25 @@ const VoiceRecorder = ({ candidate, onResult, disabled }) => {
   return (
     <div className="space-y-4">
       <div>
-        <h3 className="card-title flex items-center gap-2">
-          <Mic className="w-5 h-5 text-primary-600 dark:text-primary-400" /> Voice enrollment
+        <h3 className="card-title flex items-center gap-2.5">
+          <span className="icon-chip w-8 h-8"><Mic className="w-4 h-4" /></span> Voice enrollment
         </h3>
-        <p className="text-sm text-muted mt-1">Press Record and read this passage aloud at a normal pace.</p>
+        <p className="text-sm text-muted mt-1.5">Press Record and read this passage aloud at a normal pace.</p>
       </div>
-      <blockquote className="surface-muted border-l-4 border-primary-500 rounded-r-lg p-4 text-sm leading-relaxed">
-        {passage ? passage.text : 'Loading passage...'}
+      <blockquote className="relative rounded-2xl p-4 pl-5 text-[0.95rem] leading-relaxed surface-muted overflow-hidden">
+        <span className="absolute left-0 top-3 bottom-3 w-1 rounded-full bg-gradient-to-b from-primary-500 to-accent-500" aria-hidden="true" />
+        {passage ? passage.text : (
+          <>
+            <span className="sr-only">Loading the passage…</span>
+            <SkeletonText lines={4} />
+          </>
+        )}
       </blockquote>
       <div className="flex flex-wrap gap-2">
         {!recording ? (
           <button onClick={start} disabled={disabled || busy || requesting || !passage} className="btn btn-primary">
             {requesting ? <Loader className="w-4 h-4 animate-spin" /> : <Mic className="w-4 h-4" />}
-            {requesting ? 'Waiting for microphone permission...' : `Record (${passage?.record_s || 25} s)`}
+            {requesting ? 'Waiting for microphone permission…' : `Record (${passage?.record_s || 25} s)`}
           </button>
         ) : (
           <button onClick={stop} className="btn btn-danger">
@@ -257,16 +265,16 @@ const VoiceRecorder = ({ candidate, onResult, disabled }) => {
       {recording && (
         <div>
           <div className="flex justify-between text-xs text-muted mb-1">
-            <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" /> Recording · input level</span>
+            <span className="inline-flex items-center gap-1.5"><span className="dot bg-[var(--danger)] animate-pulse" /> Recording · input level</span>
             <span className="font-mono">{level.toFixed(0)} dBFS</span>
           </div>
-          <div className="h-2 rounded-full bg-slate-200 dark:bg-slate-800 overflow-hidden" role="meter" aria-valuemin={-60} aria-valuemax={0} aria-valuenow={Math.round(level)} aria-label="Microphone level">
-            <div className="h-2 rounded-full bg-primary-600 transition-all" style={{ width: `${levelPct}%` }} />
+          <div className="track" role="meter" aria-valuemin={-60} aria-valuemax={0} aria-valuenow={Math.round(level)} aria-label="Microphone level">
+            <div className="track-fill duration-100" style={{ width: `${levelPct}%` }} />
           </div>
         </div>
       )}
       {busy && (
-        <p className="text-sm text-muted inline-flex items-center gap-2"><Loader className="w-4 h-4 animate-spin" /> Checking the recording...</p>
+        <p className="text-sm text-muted inline-flex items-center gap-2"><Loader className="w-4 h-4 animate-spin" /> Checking the recording…</p>
       )}
       {error && (
         <div className="alert alert-error"><AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" /> <span>{error}</span></div>
@@ -291,9 +299,9 @@ const VoiceRecorder = ({ candidate, onResult, disabled }) => {
                 ['Clipping', `${(100 * m.clip_frac).toFixed(2)} %`],
                 ['Consistency', (m.consistency ?? 0).toFixed(2)],
               ].map(([k, v]) => (
-                <div key={k} className="surface-muted rounded-lg p-2">
+                <div key={k} className="surface-muted rounded-xl p-2.5">
                   <div className="text-subtle">{k}</div>
-                  <div className="font-mono font-semibold">{v}</div>
+                  <div className="font-mono font-semibold tabular-nums mt-0.5">{v}</div>
                 </div>
               ))}
             </div>
@@ -377,18 +385,19 @@ const SetupScreen = ({ onEnrolled }) => {
 
   const ready = consent && !!candidateId;
   const StepDot = ({ n, done }) => (
-    <span className={`inline-flex items-center justify-center w-7 h-7 rounded-full text-sm font-semibold ${
-      done ? 'bg-green-600 text-white' : 'bg-primary-600 text-white'
+    <span className={`inline-flex items-center justify-center w-8 h-8 rounded-xl text-sm font-semibold transition-colors ${
+      done ? 'bg-[#2FB37B] text-white' : 'bg-gradient-to-br from-primary-600 to-accent-600 text-white shadow-glow'
     }`}>
-      {done ? <Check className="w-4 h-4" /> : n}
+      {done ? <Check className="w-4 h-4" aria-label="done" /> : n}
     </span>
   );
 
   return (
     <div className="max-w-5xl mx-auto space-y-6">
       <div>
-        <h1 className="page-title">Enrollment</h1>
-        <p className="text-muted mt-1">Register your face and voice before the proctored exam.</p>
+        <p className="eyebrow">Step 1 · Before the exam</p>
+        <h1 className="page-title mt-1">Enrollment</h1>
+        <p className="text-muted mt-1.5">Register your face and voice so the system can recognise you during the test.</p>
       </div>
 
       {/* 1. candidate + consent */}
@@ -398,16 +407,21 @@ const SetupScreen = ({ onEnrolled }) => {
           <h2 className="card-title">Candidate and consent</h2>
         </div>
         <div className="flex flex-col md:flex-row gap-4 md:items-end">
-          <label className="flex-1">
-            <span className="block text-sm font-medium text-muted mb-1">Candidate ID</span>
+          <div className="flex-1">
+            <label htmlFor="candidate-id" className="label">Candidate ID</label>
             <input
+              id="candidate-id"
               value={candidate}
               onChange={(e) => { setCandidate(e.target.value); setSavedInfo(null); }}
               onBlur={checkSaved}
-              placeholder="e.g. roll number"
+              placeholder="e.g. 21BCE1234"
+              autoComplete="off"
+              spellCheck={false}
+              aria-describedby="candidate-id-hint"
               className="input"
             />
-          </label>
+            <p id="candidate-id-hint" className="field-hint">Your roll or registration number, exactly as on your admit card.</p>
+          </div>
           {savedInfo?.face && (
             <button onClick={() => onEnrolled(candidateId)} className="btn btn-secondary">
               <History className="w-4 h-4" /> Use saved enrollment (voice: {savedInfo.voice ? 'yes' : 'no'})
@@ -431,18 +445,22 @@ const SetupScreen = ({ onEnrolled }) => {
         <section className="card space-y-4">
           <div className="flex items-center gap-3">
             <StepDot n={2} done={faceOk} />
-            <h2 className="card-title flex items-center gap-2">
-              <Camera className="w-5 h-5 text-primary-600 dark:text-primary-400" /> Reference photo
+            <h2 className="card-title flex items-center gap-2.5">
+              <span className="icon-chip w-8 h-8"><Camera className="w-4 h-4" /></span> Reference photo
             </h2>
           </div>
-          <div className="flex gap-2 p-1 rounded-lg surface-muted">
+          <div className="segmented flex w-full" role="tablist" aria-label="Photo source">
             <button
+              role="tab"
+              aria-selected={captureMode === 'webcam'}
               onClick={() => { setCaptureMode('webcam'); handleRetake(); }}
               className={`tab flex-1 justify-center ${captureMode === 'webcam' ? 'tab-active' : 'tab-idle'}`}
             >
               <Camera className="w-4 h-4" /> Webcam
             </button>
             <button
+              role="tab"
+              aria-selected={captureMode === 'upload'}
               onClick={() => { setCaptureMode('upload'); handleRetake(); }}
               className={`tab flex-1 justify-center ${captureMode === 'upload' ? 'tab-active' : 'tab-idle'}`}
             >
@@ -450,13 +468,14 @@ const SetupScreen = ({ onEnrolled }) => {
             </button>
           </div>
 
-          <div className="relative bg-slate-900 rounded-lg overflow-hidden aspect-video ring-1 ring-slate-200 dark:ring-slate-800">
+          <div className="media-frame">
             {!capturedImage ? (
               captureMode === 'webcam' ? (
                 <Webcam ref={webcamRef} screenshotFormat="image/jpeg" className="w-full h-full object-cover" mirrored />
               ) : (
-                <div className="w-full h-full flex flex-col items-center justify-center gap-3 text-slate-300">
-                  <ImageIcon className="w-10 h-10 opacity-60" />
+                <div className="w-full h-full flex flex-col items-center justify-center gap-3 text-white/80 px-6 text-center">
+                  <span className="inline-flex items-center justify-center w-12 h-12 rounded-2xl bg-white/10"><ImageIcon className="w-6 h-6" /></span>
+                  <p className="text-sm">A clear, front-facing photo (JPG or PNG)</p>
                   <button onClick={() => fileInputRef.current.click()} className="btn btn-primary">
                     <Upload className="w-4 h-4" /> Choose image
                   </button>
@@ -467,7 +486,7 @@ const SetupScreen = ({ onEnrolled }) => {
               <img src={capturedImage} alt="Captured reference" className="w-full h-full object-cover" />
             )}
             {faceOk && (
-              <span className="absolute top-3 left-3 badge badge-success"><CheckCircle className="w-4 h-4" /> Enrolled</span>
+              <span className="absolute top-3 left-3 badge bg-[#2FB37B] text-white shadow-glass"><CheckCircle className="w-3.5 h-3.5" /> Enrolled</span>
             )}
           </div>
 
@@ -492,7 +511,7 @@ const SetupScreen = ({ onEnrolled }) => {
                 </button>
                 <button onClick={handleSubmitFace} className="btn btn-primary flex-1" disabled={loading || faceOk}>
                   {loading ? <Loader className="w-4 h-4 animate-spin" /> : <CheckCircle className="w-4 h-4" />}
-                  {loading ? 'Checking...' : faceOk ? 'Enrolled' : 'Confirm photo'}
+                  {loading ? 'Checking…' : faceOk ? 'Enrolled' : 'Confirm photo'}
                 </button>
               </>
             )}
@@ -504,10 +523,13 @@ const SetupScreen = ({ onEnrolled }) => {
           {faceOk ? (
             <VoiceRecorder candidate={candidateId} onResult={setVoice} disabled={voiceOk || attemptsUsed} />
           ) : (
-            <div className="h-full flex flex-col items-center justify-center text-center gap-3 py-12 text-subtle">
-              <Mic className="w-10 h-10 opacity-60" />
-              <p className="text-sm">Enroll the reference photo first, then record your voice.</p>
-            </div>
+            <EmptyState
+              className="h-full"
+              icon={Mic}
+              title="Voice enrollment"
+              description="Confirm your reference photo first. Then you will read a short passage aloud to create your voiceprint."
+              action={<span className="badge badge-muted"><CameraIcon className="w-3.5 h-3.5" /> Waiting for step 2</span>}
+            />
           )}
         </section>
       </div>

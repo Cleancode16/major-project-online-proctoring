@@ -2,103 +2,248 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Shared styles with light + dark variants (flow.txt PART II-D, "Layout + theme"). */
+/*
+  UI3 design system (flow.txt PART II-D "UI3"): iOS / visionOS-inspired glass surfaces.
+  Tokens live here as CSS variables (light + dark); component classes below use them, so every screen shares
+  one set of colours, radii, shadows and motion. Text colours were checked for WCAG AA (>= 4.5:1) on the
+  page background and on glass: muted #5B6579 (5.4:1), subtle #646F86 (4.7:1); white on primary-600 (4.6:1).
+*/
 
 :root {
   color-scheme: light;
-  /* chart series: reference palette slots 1-2, light steps */
-  --series-video: #2a78d6;
-  --series-audio: #eb6834;
+  --bg: #F5F7FB;
+  --bg-2: #EBF0F8;
+  --ambient-1: rgba(100, 133, 232, 0.20);   /* primary */
+  --ambient-2: rgba(155, 138, 251, 0.18);   /* lavender */
+  --ambient-3: rgba(52, 199, 138, 0.08);    /* faint mint */
+  --glass: rgba(255, 255, 255, 0.62);
+  --glass-strong: rgba(255, 255, 255, 0.80);
+  --glass-solid: #FBFCFE;                   /* fallback when backdrop blur is unsupported */
+  --glass-border: rgba(255, 255, 255, 0.75);
+  --hairline: rgba(23, 32, 51, 0.08);
+  --fill: rgba(23, 32, 51, 0.05);           /* subtle wells: segmented controls, inputs, tracks */
+  --fill-strong: rgba(23, 32, 51, 0.08);
+  --text: #172033;
+  --text-muted: #5B6579;
+  --text-subtle: #646F86;
+  --ring: rgba(100, 133, 232, 0.45);
+  --success: #34C78A;
+  --warning: #F3B85B;
+  --danger: #F07178;
+  /* chart series (reference palette slots 1-2) */
+  --series-video: #4F6FD8;
+  --series-audio: #E07A3F;
 }
+
 .dark {
   color-scheme: dark;
-  /* same hues, dark steps */
-  --series-video: #3987e5;
-  --series-audio: #d95926;
+  --bg: #0B1020;
+  --bg-2: #10172C;
+  --ambient-1: rgba(100, 133, 232, 0.22);
+  --ambient-2: rgba(155, 138, 251, 0.16);
+  --ambient-3: rgba(52, 199, 138, 0.05);
+  --glass: rgba(22, 30, 52, 0.58);
+  --glass-strong: rgba(26, 35, 60, 0.82);
+  --glass-solid: #161E34;
+  --glass-border: rgba(255, 255, 255, 0.09);
+  --hairline: rgba(255, 255, 255, 0.08);
+  --fill: rgba(255, 255, 255, 0.05);
+  --fill-strong: rgba(255, 255, 255, 0.09);
+  --text: #E8ECF6;
+  --text-muted: #A9B2C6;
+  --text-subtle: #929CB3;
+  --ring: rgba(130, 157, 238, 0.55);
+  --series-video: #829DEE;
+  --series-audio: #F09A62;
 }
 
 @layer base {
+  html { -webkit-text-size-adjust: 100%; }
   body {
-    @apply bg-slate-50 text-slate-900 antialiased transition-colors duration-200 dark:bg-slate-950 dark:text-slate-100;
+    @apply font-sans antialiased;
+    color: var(--text);
+    background-color: var(--bg);
+    /* soft blue-lavender ambient light, fixed so long pages scroll over it */
+    background-image:
+      radial-gradient(60rem 40rem at 8% -10%, var(--ambient-1), transparent 60%),
+      radial-gradient(50rem 36rem at 100% 0%, var(--ambient-2), transparent 60%),
+      radial-gradient(40rem 30rem at 50% 110%, var(--ambient-3), transparent 60%),
+      linear-gradient(180deg, var(--bg) 0%, var(--bg-2) 100%);
+    background-attachment: fixed;
+    min-height: 100vh;
+    transition: background-color 200ms ease, color 200ms ease;
   }
+  ::selection { background: rgba(100, 133, 232, 0.25); }
+  :focus-visible { outline: none; }
+  h1, h2, h3 { letter-spacing: -0.015em; }
 }
 
 @layer components {
-  /* buttons */
+  /* ------------------------------------------------------------ glass surfaces */
+  .glass {
+    background: var(--glass-solid);
+    border: 1px solid var(--glass-border);
+    @apply shadow-glass;
+  }
+  .glass-strong {
+    background: var(--glass-solid);
+    border: 1px solid var(--glass-border);
+    @apply shadow-glass-lg;
+  }
+  @supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+    .glass { background: var(--glass); -webkit-backdrop-filter: blur(20px) saturate(160%); backdrop-filter: blur(20px) saturate(160%); }
+    .glass-strong { background: var(--glass-strong); -webkit-backdrop-filter: blur(24px) saturate(170%); backdrop-filter: blur(24px) saturate(170%); }
+  }
+
+  .card { @apply glass rounded-3xl p-5 sm:p-6; }
+  .card-hover { @apply transition-all duration-200 hover:-translate-y-0.5 hover:shadow-glass-lg; }
+  .card-title { @apply text-lg font-semibold; color: var(--text); }
+  .page-title { @apply text-2xl sm:text-[2rem] font-semibold tracking-tight; color: var(--text); }
+  .eyebrow { @apply text-xs font-semibold uppercase tracking-[0.08em] text-primary-600 dark:text-primary-300; }
+  .text-muted { color: var(--text-muted); }
+  .text-subtle { color: var(--text-subtle); }
+  .surface-muted { background: var(--fill); }
+  .divider { border-color: var(--hairline); }
+  .hairline { border-color: var(--hairline); }
+
+  /* icon chip used in section titles / empty states */
+  .icon-chip {
+    @apply inline-flex items-center justify-center w-9 h-9 rounded-xl text-primary-600 dark:text-primary-300
+      bg-primary-500/10 dark:bg-primary-400/15;
+  }
+
+  /* ------------------------------------------------------------ buttons */
   .btn {
-    @apply inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg font-medium transition-all duration-200
-      focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2
-      dark:focus-visible:ring-offset-slate-900 disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100;
+    @apply relative inline-flex items-center justify-center gap-2 min-h-[2.75rem] px-4 py-2 rounded-2xl text-sm
+      font-medium select-none transition-all duration-200 ease-out
+      focus:outline-none focus-visible:ring-4
+      active:scale-[0.97] disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100 disabled:shadow-none;
+    --tw-ring-color: var(--ring);
   }
-  .btn-primary { @apply bg-primary-600 text-white hover:bg-primary-700 active:scale-95; }
+  .btn-primary {
+    @apply text-white shadow-glow bg-gradient-to-b from-primary-600 to-[#4A63CC] hover:brightness-110
+      dark:from-primary-600 dark:to-accent-600;
+  }
+  .btn-accent { @apply text-white shadow-glow bg-gradient-to-br from-primary-600 to-accent-600 hover:brightness-110; }
   .btn-secondary {
-    @apply bg-slate-200 text-slate-800 hover:bg-slate-300 active:scale-95
-      dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700;
+    @apply glass hover:brightness-[1.03] dark:hover:brightness-125;
+    color: var(--text);
   }
-  .btn-danger { @apply bg-red-600 text-white hover:bg-red-700 active:scale-95; }
+  .btn-outline {
+    @apply bg-transparent border border-primary-500/50 text-primary-700 hover:bg-primary-500/10
+      dark:text-primary-300 dark:border-primary-400/40;
+  }
+  .btn-ghost { @apply bg-transparent hover:bg-[var(--fill-strong)]; color: var(--text-muted); }
+  .btn-danger {
+    @apply text-white bg-gradient-to-b from-[#E2525B] to-[#C9404A] hover:brightness-110;
+    box-shadow: 0 6px 18px -6px rgba(226, 82, 91, 0.55);
+  }
+  .btn-sm { @apply min-h-[2.25rem] px-3 py-1.5 text-xs rounded-xl; }
   .btn-icon {
-    @apply inline-flex items-center justify-center w-10 h-10 rounded-lg text-slate-600 hover:bg-slate-100 transition-colors
-      focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500
-      dark:text-slate-300 dark:hover:bg-slate-800;
+    @apply inline-flex items-center justify-center w-11 h-11 rounded-2xl transition-all duration-200
+      hover:bg-[var(--fill-strong)] active:scale-95 focus:outline-none focus-visible:ring-4;
+    color: var(--text-muted);
+    --tw-ring-color: var(--ring);
   }
 
-  /* surfaces + text */
-  .card {
-    @apply bg-white rounded-xl shadow-sm ring-1 ring-slate-200 p-6 dark:bg-slate-900 dark:ring-slate-800;
-  }
-  .card-title { @apply text-lg font-semibold text-slate-900 dark:text-slate-100; }
-  .page-title { @apply text-2xl sm:text-3xl font-bold text-slate-900 dark:text-slate-50; }
-  .text-muted { @apply text-slate-600 dark:text-slate-400; }
-  .text-subtle { @apply text-slate-500 dark:text-slate-500; }
-  .surface-muted { @apply bg-slate-50 dark:bg-slate-800/60; }
-  .divider { @apply border-slate-200 dark:border-slate-800; }
-
-  /* form controls */
+  /* ------------------------------------------------------------ forms */
+  .label { @apply block text-sm font-medium mb-1.5; color: var(--text); }
+  .field-hint { @apply text-xs mt-1.5; color: var(--text-subtle); }
   .input {
-    @apply w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900 placeholder-slate-400
-      focus:outline-none focus:ring-2 focus:ring-primary-500
-      dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:placeholder-slate-500;
+    @apply w-full min-h-[2.75rem] rounded-2xl px-4 py-2.5 text-[0.95rem] transition-all duration-200
+      focus:outline-none focus:ring-4;
+    background: var(--glass-strong);
+    border: 1px solid var(--hairline);
+    color: var(--text);
+    --tw-ring-color: var(--ring);
   }
-  .checkbox { @apply h-4 w-4 rounded accent-primary-600; }
-
-  /* alerts */
-  .alert { @apply flex items-start gap-3 rounded-lg border p-3 text-sm; }
-  .alert-error { @apply border-red-200 bg-red-50 text-red-800 dark:border-red-900 dark:bg-red-950/50 dark:text-red-200; }
-  .alert-warn { @apply border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200; }
-  .alert-ok { @apply border-green-200 bg-green-50 text-green-800 dark:border-green-900 dark:bg-green-950/40 dark:text-green-200; }
-  .alert-info { @apply border-blue-200 bg-blue-50 text-blue-900 dark:border-blue-900 dark:bg-blue-950/40 dark:text-blue-100; }
-
-  /* tabs / segmented control */
-  .tab { @apply inline-flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all disabled:opacity-60; }
-  .tab-active { @apply bg-primary-600 text-white shadow-sm; }
-  .tab-idle {
-    @apply bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700;
+  .input::placeholder { color: var(--text-subtle); opacity: 0.85; }
+  .input:focus { border-color: rgba(100, 133, 232, 0.6); }
+  .input[aria-invalid="true"] { border-color: var(--danger); --tw-ring-color: rgba(240, 113, 120, 0.35); }
+  .checkbox {
+    @apply h-5 w-5 rounded-md cursor-pointer accent-primary-600 focus:outline-none focus-visible:ring-4;
+    --tw-ring-color: var(--ring);
   }
 
-  /* stat tiles */
-  .stat { @apply rounded-lg p-4 ring-1; }
-  .stat-label { @apply text-sm font-medium opacity-80; }
-  .stat-value { @apply text-2xl font-bold; }
-  .stat-blue { @apply bg-blue-50 ring-blue-100 text-blue-900 dark:bg-blue-950/40 dark:ring-blue-900/60 dark:text-blue-100; }
-  .stat-purple { @apply bg-purple-50 ring-purple-100 text-purple-900 dark:bg-purple-950/40 dark:ring-purple-900/60 dark:text-purple-100; }
-  .stat-orange { @apply bg-orange-50 ring-orange-100 text-orange-900 dark:bg-orange-950/40 dark:ring-orange-900/60 dark:text-orange-100; }
-  .stat-red { @apply bg-red-50 ring-red-100 text-red-900 dark:bg-red-950/40 dark:ring-red-900/60 dark:text-red-100; }
+  /* ------------------------------------------------------------ status tones (tinted glass) */
+  .tone-success { @apply bg-[#34C78A]/[0.12] text-[#0E6B47] ring-1 ring-[#34C78A]/30 dark:text-[#7EE2B8] dark:bg-[#34C78A]/[0.12]; }
+  .tone-warning { @apply bg-[#F3B85B]/[0.16] text-[#7A4D06] ring-1 ring-[#F3B85B]/40 dark:text-[#F7D18F] dark:bg-[#F3B85B]/[0.12]; }
+  .tone-danger { @apply bg-[#F07178]/[0.12] text-[#9B1C26] ring-1 ring-[#F07178]/35 dark:text-[#F8A5AA] dark:bg-[#F07178]/[0.14]; }
+  .tone-info { @apply bg-primary-500/10 text-primary-800 ring-1 ring-primary-500/25 dark:text-primary-200 dark:bg-primary-400/[0.12]; }
+  .tone-accent { @apply bg-accent-500/[0.12] text-accent-800 ring-1 ring-accent-500/30 dark:text-accent-200 dark:bg-accent-400/[0.12]; }
+  .tone-neutral { background: var(--fill); color: var(--text-muted); @apply ring-1 ring-[var(--hairline)]; }
 
-  /* badges */
-  .badge { @apply inline-flex items-center gap-1 px-3 py-1 rounded-full text-sm font-medium; }
-  .badge-success { @apply bg-green-100 text-green-800 dark:bg-green-900/70 dark:text-green-100; }
-  .badge-warning { @apply bg-yellow-100 text-yellow-800 dark:bg-yellow-900/70 dark:text-yellow-100; }
-  .badge-danger { @apply bg-red-100 text-red-800 dark:bg-red-900/70 dark:text-red-100; }
-  .badge-info { @apply bg-blue-100 text-blue-800 dark:bg-blue-900/70 dark:text-blue-100; }
-  .badge-muted { @apply bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-200; }
+  /* ------------------------------------------------------------ alerts */
+  .alert { @apply flex items-start gap-3 rounded-2xl p-3.5 text-sm leading-relaxed animate-slide-up; }
+  .alert-error { @apply tone-danger; }
+  .alert-warn { @apply tone-warning; }
+  .alert-ok { @apply tone-success; }
+  .alert-info { @apply tone-info; }
 
-  /* tables */
-  .table-head { @apply text-left text-slate-500 border-b border-slate-200 dark:text-slate-400 dark:border-slate-800; }
-  .table-row { @apply border-b border-slate-100 last:border-0 dark:border-slate-800; }
+  /* ------------------------------------------------------------ segmented control (tabs) */
+  .segmented { @apply inline-flex gap-1 p-1 rounded-2xl; background: var(--fill-strong); }
+  .tab {
+    @apply inline-flex items-center gap-2 min-h-[2.5rem] px-4 py-2 rounded-xl text-sm font-medium transition-all
+      duration-200 focus:outline-none focus-visible:ring-4 disabled:opacity-60 disabled:cursor-not-allowed;
+    --tw-ring-color: var(--ring);
+  }
+  .tab-active { @apply shadow-glass; background: var(--glass-solid); color: var(--text); }
+  .dark .tab-active { background: rgba(255, 255, 255, 0.10); }
+  .tab-idle { color: var(--text-muted); @apply hover:bg-[var(--fill)]; }
 
-  /* charts */
-  .chart-text { @apply fill-slate-600 dark:fill-slate-400; }
-  .chart-text-strong { @apply fill-slate-900 dark:fill-slate-100; }
-  .chart-grid { @apply stroke-slate-200 dark:stroke-slate-700; }
-  .chart-gap { @apply stroke-white dark:stroke-slate-900; }
+  /* ------------------------------------------------------------ stat tiles */
+  .stat { @apply rounded-2xl p-4 ring-1; }
+  .stat-label { @apply text-xs font-medium uppercase tracking-wide opacity-80; }
+  .stat-value { @apply text-2xl font-semibold tracking-tight tabular-nums mt-1; }
+  .stat-blue { @apply tone-info; }
+  .stat-purple { @apply tone-accent; }
+  .stat-orange { @apply bg-[#E07A3F]/10 text-[#8A3E12] ring-[#E07A3F]/25 dark:text-[#F6B98F] dark:bg-[#E07A3F]/[0.12]; }
+  .stat-red { @apply tone-danger; }
+
+  /* ------------------------------------------------------------ badges */
+  .badge { @apply inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium whitespace-nowrap; }
+  .badge-success { @apply tone-success; }
+  .badge-warning { @apply tone-warning; }
+  .badge-danger { @apply tone-danger; }
+  .badge-info { @apply tone-info; }
+  .badge-accent { @apply tone-accent; }
+  .badge-muted { @apply tone-neutral; }
+  .dot { @apply inline-block w-2 h-2 rounded-full; }
+
+  /* ------------------------------------------------------------ progress / meters */
+  .track { @apply h-2 rounded-full overflow-hidden; background: var(--fill-strong); }
+  .track-fill { @apply h-full rounded-full bg-gradient-to-r from-primary-500 to-accent-500 transition-all duration-300; }
+
+  /* ------------------------------------------------------------ tables */
+  .table-head { @apply text-left text-xs font-semibold uppercase tracking-wide border-b; color: var(--text-subtle); border-color: var(--hairline); }
+  .table-row { @apply border-b last:border-0 transition-colors hover:bg-[var(--fill)]; border-color: var(--hairline); }
+
+  /* ------------------------------------------------------------ skeletons */
+  .skeleton { @apply relative overflow-hidden rounded-xl; background: var(--fill-strong); }
+  .skeleton::after {
+    content: "";
+    @apply absolute inset-0 -translate-x-full animate-shimmer;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.45), transparent);
+  }
+  .dark .skeleton::after { background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.07), transparent); }
+
+  /* ------------------------------------------------------------ media frame (webcam / video) */
+  .media-frame { @apply relative overflow-hidden rounded-2xl aspect-video bg-[#0E1424] ring-1 ring-black/5 dark:ring-white/10; }
+
+  /* ------------------------------------------------------------ charts */
+  .chart-text { fill: var(--text-muted); }
+  .chart-text-strong { fill: var(--text); }
+  .chart-grid { stroke: var(--hairline); }
+  .chart-gap { stroke: var(--bg); }
+}
+
+/* motion: respect the user's reduced-motion preference everywhere */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .skeleton::after { display: none; }
 }

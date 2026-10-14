@@ -2,24 +2,28 @@ import { useState } from 'react';
 import {
   ShieldCheck, Flag, Ban, Download, RotateCcw, Play, AlertTriangle, TrendingUp, Clock, Mic, ListChecks,
   Image as ImageIcon, Table2, GanttChartSquare, Smartphone, Users, MoveHorizontal, UploadCloud, FileText, Gauge, ScanFace,
+  ImageOff, CheckCircle2, ChevronDown,
 } from 'lucide-react';
+import EmptyState from './ui/EmptyState';
 
 // Results report (flow.txt PART II-D, D.3). Input: the report JSON built by server/aggregation/report.py.
 // Series colours: CSS variables --series-video / --series-audio (index.css), light/dark steps of the
 // reference palette slots 1-2. Chart text and grid lines follow the theme.
 const SOURCE_VAR = { video: 'var(--series-video)', audio: 'var(--series-audio)' };
+// UI3: verdict tone (index.css .tone-*), word shown next to the label, accent bar colour
 const VERDICT = {
-  VALID: { cls: 'border-green-300 bg-green-50 text-green-900 dark:border-green-800 dark:bg-green-950/40 dark:text-green-100', Icon: ShieldCheck },
-  SUSPICIOUS: { cls: 'border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100', Icon: Flag },
-  INVALID: { cls: 'border-red-300 bg-red-50 text-red-900 dark:border-red-800 dark:bg-red-950/40 dark:text-red-100', Icon: Ban },
+  VALID: { tone: 'tone-success', word: 'Pass', bar: 'from-[#34C78A] to-[#2FB37B]', Icon: ShieldCheck },
+  SUSPICIOUS: { tone: 'tone-warning', word: 'Review', bar: 'from-[#F3B85B] to-[#E9A23B]', Icon: Flag },
+  INVALID: { tone: 'tone-danger', word: 'Fail', bar: 'from-[#F07178] to-[#E2525B]', Icon: Ban },
 };
-const nice = (t) => t.toLowerCase().replace(/_/g, ' ');
+const nice = (t) => String(t ?? '').toLowerCase().replace(/_/g, ' ');
+const orDash = (v) => (v === undefined || v === null || v === '' ? '—' : v);
 
 const Legend = () => (
   <div className="flex gap-4 text-xs text-muted mb-2">
     {Object.entries(SOURCE_VAR).map(([k, c]) => (
-      <span key={k} className="flex items-center gap-1.5">
-        <span className="inline-block w-3 h-3 rounded-sm" style={{ background: c }} /> {k}
+      <span key={k} className="flex items-center gap-1.5 capitalize">
+        <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: c }} /> {k}
       </span>
     ))}
   </div>
@@ -28,9 +32,8 @@ const Legend = () => (
 const Tooltip = ({ tip }) =>
   tip ? (
     <div
-      className="pointer-events-none fixed z-50 rounded-md px-2 py-1 text-xs shadow-lg whitespace-pre
-        bg-slate-900 text-white ring-1 ring-slate-700 dark:bg-slate-100 dark:text-slate-900 dark:ring-slate-300"
-      style={{ left: tip.x + 12, top: tip.y + 12 }}
+      className="pointer-events-none fixed z-50 rounded-xl px-3 py-2 text-xs whitespace-pre glass-strong animate-fade-in"
+      style={{ left: tip.x + 14, top: tip.y + 14 }}
     >
       {tip.text}
     </div>
@@ -68,7 +71,7 @@ const PercentBars = ({ rows }) => {
             >
               <rect x={0} y={y - 4} width={width} height={rowH} fill="transparent" />
               <text x={labelW - 8} y={y + 12} fontSize="11" className="chart-text" textAnchor="end">{nice(r.type)}</text>
-              <rect x={labelW} y={y + 2} width={w} height={14} rx={4} style={{ fill: SOURCE_VAR[r.source] }} />
+              <rect x={labelW} y={y + 2} width={w} height={14} rx={7} style={{ fill: SOURCE_VAR[r.source] }} />
               <text x={labelW + w + 6} y={y + 13} fontSize="11" className="chart-text-strong">{r.percentage.toFixed(1)}%</text>
             </g>
           );
@@ -112,7 +115,7 @@ const Timeline = ({ events, duration }) => {
               y={row * rowH + 5}
               width={w}
               height={14}
-              rx={3}
+              rx={5}
               style={{ fill: SOURCE_VAR[e.source] }}
               className="chart-gap"
               strokeWidth="1"
@@ -185,24 +188,24 @@ const SEVERITY_BADGE = { critical: 'badge-danger', medium: 'badge-warning', low:
 const ScoringCard = ({ verdict, rows }) => (
   <section className="card space-y-4">
     <SectionTitle Icon={Gauge}>Scoring</SectionTitle>
-    <p className="text-sm">
+    <p className="text-sm leading-relaxed">
       <span className="font-semibold">Overall score {verdict.score.toFixed(1)} / 100 ({verdict.label}).</span>{' '}
-      <span className="text-muted">{verdict.score_explanation}</span>
+      <span className="text-muted">{orDash(verdict.score_explanation)}</span>
     </p>
-    <ul className="space-y-3">
+    <ul className="space-y-4">
       {rows.map((r) => (
-        <li key={r.type} className="space-y-1">
+        <li key={r.type} className="space-y-1.5">
           <div className="flex flex-wrap items-center gap-2 justify-between">
             <span className="font-medium capitalize inline-flex items-center gap-2">
               {nice(r.type)}
               <span className={`badge text-xs px-2 py-0.5 ${SEVERITY_BADGE[r.severity] || 'badge-muted'}`}>{r.severity}</span>
             </span>
-            <span className="font-mono text-sm">{r.score != null ? r.score.toFixed(1) : '-'} / {r.max_points}</span>
+            <span className="font-mono text-sm tabular-nums">{r.score != null ? r.score.toFixed(1) : '—'} / {r.max_points}</span>
           </div>
-          <div className="h-2 rounded-full bg-slate-200 dark:bg-slate-800 overflow-hidden" aria-hidden="true">
-            <div className="h-full rounded-full" style={{
+          <div className="track" aria-hidden="true">
+            <div className="h-full rounded-full transition-all duration-500" style={{
               width: `${r.max_points ? (100 * (r.score || 0)) / r.max_points : 0}%`,
-              background: r.critical ? 'rgb(220 38 38)' : SOURCE_VAR[r.source],
+              background: r.critical ? 'var(--danger)' : SOURCE_VAR[r.source],
             }} />
           </div>
           <p className="text-xs text-muted">{r.score_explanation}</p>
@@ -212,6 +215,24 @@ const ScoringCard = ({ verdict, rows }) => (
   </section>
 );
 
+// evidence snapshot with a designed fallback when the file is missing or fails to load (never a broken image)
+const EvidenceImage = ({ src, alt, note }) => {
+  const [failed, setFailed] = useState(!src);
+  if (failed) {
+    return (
+      <div className="aspect-video flex flex-col items-center justify-center gap-1.5 text-xs text-subtle surface-muted">
+        <ImageOff className="w-5 h-5" aria-hidden="true" /> {note || 'Image not available'}
+      </div>
+    );
+  }
+  return (
+    <a href={src} target="_blank" rel="noreferrer" className="block overflow-hidden">
+      <img src={src} alt={alt} className="w-full aspect-video object-cover transition-transform duration-300 hover:scale-[1.02]"
+        loading="lazy" onError={() => setFailed(true)} />
+    </a>
+  );
+};
+
 const EvidenceGroup = ({ group, data, counter, upload, reportId }) => {
   const { label, Icon } = GROUP_META[group];
   const items = data?.items || [];
@@ -219,7 +240,7 @@ const EvidenceGroup = ({ group, data, counter, upload, reportId }) => {
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2 justify-between">
-        <h3 className="font-semibold inline-flex items-center gap-2"><Icon className="w-4 h-4" /> {label}</h3>
+        <h3 className="font-semibold inline-flex items-center gap-2"><span className="icon-chip w-7 h-7 rounded-lg"><Icon className="w-3.5 h-3.5" /></span> {label}</h3>
         <div className="flex items-center gap-2">
           {counter && (
             <span className={`badge text-xs ${counter.exceeded ? 'badge-danger' : 'badge-muted'}`}>
@@ -230,36 +251,32 @@ const EvidenceGroup = ({ group, data, counter, upload, reportId }) => {
         </div>
       </div>
       {upload?.status === 'failed' && (
-        <div className="alert alert-error text-xs"><AlertTriangle className="w-4 h-4 flex-shrink-0" /> Upload failed: {upload.error}</div>
+        <div className="alert alert-error text-xs"><AlertTriangle className="w-4 h-4 flex-shrink-0" /> Upload failed: {orDash(upload.error)}</div>
       )}
       {items.length === 0 ? (
-        <p className="text-sm text-subtle">No events.</p>
+        <div className="rounded-2xl surface-muted px-4 py-3 text-sm text-muted inline-flex items-center gap-2">
+          <CheckCircle2 className="w-4 h-4 text-[#2FB37B]" aria-hidden="true" /> No {label.toLowerCase()} recorded in this session.
+        </div>
       ) : group === 'voice' ? (
         <ul className="space-y-2">
           {items.map((it) => (
-            <li key={it.id} className="surface-muted rounded-lg p-3 flex flex-col md:flex-row md:items-center gap-3">
+            <li key={it.id} className="surface-muted rounded-2xl p-3.5 flex flex-col md:flex-row md:items-center gap-3">
               <div className="md:w-64 flex-shrink-0">
                 <p className="text-sm font-medium">{fmtT(it.start_s)} – {fmtT(it.end_s)}</p>
                 <p className="text-xs text-muted">{itemDetails(group, it)}</p>
               </div>
               {it.file && reportId
                 ? <audio controls preload="none" src={fileUrl(it.file)} className="w-full md:flex-1" />
-                : <span className="text-xs text-subtle">{it.note || 'no clip'}</span>}
+                : <span className="text-xs text-subtle">{it.note || 'Audio clip not available'}</span>}
             </li>
           ))}
         </ul>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
           {items.map((it) => (
-            <figure key={it.id} className="rounded-lg overflow-hidden ring-1 ring-slate-200 dark:ring-slate-800">
-              {it.file && reportId ? (
-                <a href={fileUrl(it.file)} target="_blank" rel="noreferrer">
-                  <img src={fileUrl(it.file)} alt={`${label} at ${fmtT(it.start_s)}`} className="w-full" loading="lazy" />
-                </a>
-              ) : (
-                <div className="aspect-video flex items-center justify-center text-xs text-subtle surface-muted">{it.note || 'no image'}</div>
-              )}
-              <figcaption className="text-xs px-2 py-1.5 surface-muted space-y-0.5">
+            <figure key={it.id} className="rounded-2xl overflow-hidden glass card-hover">
+              <EvidenceImage src={it.file && reportId ? fileUrl(it.file) : null} alt={`${label} at ${fmtT(it.start_s)}`} note={it.note} />
+              <figcaption className="text-xs px-3 py-2.5 space-y-0.5">
                 <p className="font-medium">{fmtT(it.start_s)} – {fmtT(it.end_s)} ({it.duration_s.toFixed(1)} s)</p>
                 <p className="text-muted">{itemDetails(group, it)}</p>
               </figcaption>
@@ -272,14 +289,14 @@ const EvidenceGroup = ({ group, data, counter, upload, reportId }) => {
 };
 
 const SectionTitle = ({ Icon, children }) => (
-  <h2 className="card-title flex items-center gap-2 mb-4">
-    <Icon className="w-5 h-5 text-primary-600 dark:text-primary-400" /> {children}
+  <h2 className="card-title flex items-center gap-2.5 mb-4">
+    <span className="icon-chip w-8 h-8"><Icon className="w-4 h-4" /></span> {children}
   </h2>
 );
 
 const Statistics = ({ report, reportId, onNewSession, onReset }) => {
   const v = report.verdict;
-  const { cls, Icon } = VERDICT[v.label] || VERDICT.SUSPICIOUS;
+  const { tone, word, bar, Icon } = VERDICT[v.label] || VERDICT.SUSPICIOUS;
   const video = report.video || {};
   const audio = report.audio || {};
   const rows = Object.entries(report.per_violation)
@@ -330,10 +347,10 @@ const Statistics = ({ report, reportId, onNewSession, onReset }) => {
   const docButtons = reportId && (
     <>
       <button onClick={() => downloadDoc('pdf')} disabled={!!busy} className="btn btn-primary">
-        <FileText className="w-4 h-4" /> {busy === 'pdf' ? 'Preparing PDF...' : 'Download PDF'}
+        <FileText className="w-4 h-4" /> {busy === 'pdf' ? 'Preparing PDF…' : 'Download PDF'}
       </button>
-      <button onClick={() => downloadDoc('docx')} disabled={!!busy} className="btn btn-primary">
-        <FileText className="w-4 h-4" /> {busy === 'docx' ? 'Preparing Word...' : 'Download Word'}
+      <button onClick={() => downloadDoc('docx')} disabled={!!busy} className="btn btn-outline">
+        <FileText className="w-4 h-4" /> {busy === 'docx' ? 'Preparing Word…' : 'Download Word'}
       </button>
     </>
   );
@@ -342,8 +359,9 @@ const Statistics = ({ report, reportId, onNewSession, onReset }) => {
     <div className="space-y-6">
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
         <div>
-          <h1 className="page-title">Session results</h1>
-          <p className="text-muted mt-1">Candidate {report.meta?.candidate} · {report.meta?.created}</p>
+          <p className="eyebrow">Step 3 · Report</p>
+          <h1 className="page-title mt-1">Session results</h1>
+          <p className="text-muted mt-1.5">Candidate {orDash(report.meta?.candidate)} · {orDash(report.meta?.created)}</p>
         </div>
         <div className="flex flex-wrap gap-3">
           {docButtons}
@@ -357,18 +375,24 @@ const Statistics = ({ report, reportId, onNewSession, onReset }) => {
         <div className="alert alert-error" role="alert"><AlertTriangle className="w-5 h-5 flex-shrink-0" /> <span>{dlError}</span></div>
       )}
 
-      <section className={`border-2 rounded-xl p-5 flex flex-col sm:flex-row sm:items-center gap-4 ${cls}`} aria-label="Verdict">
-        <Icon className="w-12 h-12 flex-shrink-0" />
-        <div className="flex-1">
-          <p className="text-2xl font-bold tracking-tight">{v.label}</p>
-          <p className="font-medium">{v.headline}</p>
-          {v.reasons.slice(1).map((r) => <p key={r} className="text-sm mt-1 opacity-90">• {r}</p>)}
-          {v.score_explanation && <p className="text-xs mt-2 opacity-80">{v.score_explanation}</p>}
+      <section className="card relative overflow-hidden flex flex-col sm:flex-row sm:items-center gap-5" aria-label="Verdict">
+        <span className={`absolute inset-y-0 left-0 w-1.5 bg-gradient-to-b ${bar}`} aria-hidden="true" />
+        <span className={`inline-flex items-center justify-center w-16 h-16 rounded-2xl flex-shrink-0 ${tone}`}>
+          <Icon className="w-8 h-8" aria-hidden="true" />
+        </span>
+        <div className="flex-1 min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="text-2xl font-semibold tracking-tight">{v.label}</p>
+            <span className={`badge ${tone}`}>{word}</span>
+          </div>
+          <p className="font-medium mt-1">{orDash(v.headline)}</p>
+          {(v.reasons || []).slice(1).map((r) => <p key={r} className="text-sm mt-1 text-muted">• {r}</p>)}
+          {v.score_explanation && <p className="text-xs mt-2 text-subtle leading-relaxed">{v.score_explanation}</p>}
         </div>
-        <div className="sm:text-right">
-          <p className="text-sm font-medium opacity-80">Violation score</p>
-          <p className="text-4xl font-bold leading-none">{v.score.toFixed(1)}</p>
-          <p className="text-xs opacity-80">of 100</p>
+        <div className="sm:text-right sm:pl-6 sm:border-l hairline">
+          <p className="text-xs font-medium uppercase tracking-wide text-subtle">Violation score</p>
+          <p className="text-5xl font-semibold tracking-tight leading-none mt-1 tabular-nums">{v.score.toFixed(1)}</p>
+          <p className="text-xs text-subtle mt-1">of 100</p>
         </div>
       </section>
 
@@ -376,7 +400,7 @@ const Statistics = ({ report, reportId, onNewSession, onReset }) => {
         <div className="stat stat-blue">
           <p className="stat-label inline-flex items-center gap-1"><Clock className="w-4 h-4" /> Video analysed</p>
           <p className="stat-value">{(video.duration_s || 0).toFixed(0)} s</p>
-          <p className="text-xs opacity-80">{video.n_samples} samples @ {(video.sample_rate_hz || 0).toFixed(2)}/s</p>
+          <p className="text-xs opacity-80">{video.n_samples ?? 0} samples @ {(video.sample_rate_hz || 0).toFixed(2)}/s</p>
         </div>
         <div className="stat stat-orange">
           <p className="stat-label inline-flex items-center gap-1"><Mic className="w-4 h-4" /> Audio</p>
@@ -401,12 +425,12 @@ const Statistics = ({ report, reportId, onNewSession, onReset }) => {
             <span className="font-semibold">Session marked as violated.</span>{' '}
             Limits exceeded for: {report.session_violation.groups_exceeded.map((g) => GROUP_META[g]?.label || g).join(', ')}.
             Their evidence was {Object.values(report.evidence_upload || {}).some((u) => u.status === 'failed') ? 'partly NOT ' : ''}uploaded
-            with session ID <span className="font-mono">{report.meta?.session_id}</span>.
+            with session ID <span className="font-mono">{orDash(report.meta?.session_id)}</span>.
           </span>
         </div>
       )}
 
-      {report.warnings.map((w) => (
+      {(report.warnings || []).map((w) => (
         <div key={w} className="alert alert-warn"><AlertTriangle className="w-5 h-5 flex-shrink-0" /> <span>{w}</span></div>
       ))}
 
@@ -415,14 +439,18 @@ const Statistics = ({ report, reportId, onNewSession, onReset }) => {
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
         <section className="card">
           <SectionTitle Icon={TrendingUp}>Violation percentage by type</SectionTitle>
-          {rows.length ? <PercentBars rows={rows} /> : <p className="text-sm text-subtle">Nothing could be measured.</p>}
+          {rows.length ? <PercentBars rows={rows} /> : (
+            <EmptyState compact icon={TrendingUp} title="Nothing could be measured"
+              description="No video or audio samples were analysed for this session." />
+          )}
         </section>
         <section className="card">
           <SectionTitle Icon={GanttChartSquare}>Timeline (video and audio)</SectionTitle>
           {report.timeline.length ? (
             <Timeline events={report.timeline} duration={Math.max(video.duration_s || 0, audio.duration_s || 0)} />
           ) : (
-            <p className="text-sm text-subtle">No violation events.</p>
+            <EmptyState compact icon={CheckCircle2} title="No violation events"
+              description="Nothing was flagged on the video or audio timeline." />
           )}
         </section>
       </div>
@@ -461,13 +489,19 @@ const Statistics = ({ report, reportId, onNewSession, onReset }) => {
             </table>
           </div>
         ) : (
-          <p className="text-sm text-subtle">{audio.status === 'ok' ? 'No audio events.' : 'Audio was not analysed.'}</p>
+          <EmptyState compact icon={Mic}
+            title={audio.status === 'ok' ? 'No audio events' : 'Audio was not analysed'}
+            description={audio.status === 'ok' ? 'Speech, voices and sounds stayed within the allowed limits.'
+              : 'No microphone or audio track was available for this session.'} />
         )}
       </section>
 
       <details className="card group">
-        <summary className="card-title cursor-pointer flex items-center gap-2 list-none">
-          <Table2 className="w-5 h-5 text-primary-600 dark:text-primary-400" /> Per-violation table (numerator / denominator)
+        <summary className="card-title cursor-pointer flex items-center gap-2.5 list-none [&::-webkit-details-marker]:hidden
+          rounded-xl focus:outline-none focus-visible:ring-4" style={{ '--tw-ring-color': 'var(--ring)' }}>
+          <span className="icon-chip w-8 h-8"><Table2 className="w-4 h-4" /></span>
+          <span className="flex-1">Per-violation table (numerator / denominator)</span>
+          <ChevronDown className="w-5 h-5 text-subtle transition-transform duration-200 group-open:rotate-180" aria-hidden="true" />
         </summary>
         <div className="overflow-x-auto mt-4">
           <table className="w-full text-sm">
@@ -500,8 +534,14 @@ const Statistics = ({ report, reportId, onNewSession, onReset }) => {
       </details>
 
       {reportId && (
-        <section className="card flex flex-col sm:flex-row sm:items-center justify-between gap-3" aria-label="Download report">
-          <p className="text-sm text-muted">Download this report. PDF and Word leave out the voice clips (they can only be played here).</p>
+        <section className="card flex flex-col sm:flex-row sm:items-center justify-between gap-4" aria-label="Download report">
+          <div className="flex items-start gap-3">
+            <span className="icon-chip"><Download className="w-4 h-4" /></span>
+            <div>
+              <p className="font-medium">Download this report</p>
+              <p className="text-sm text-muted mt-0.5">PDF and Word leave out the voice clips; those can only be played here.</p>
+            </div>
+          </div>
           <div className="flex flex-wrap gap-3">{docButtons}</div>
         </section>
       )}

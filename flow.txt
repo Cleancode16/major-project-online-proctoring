@@ -1173,6 +1173,51 @@ http://localhost:5000, so the browser only talks to one origin.
 Privacy: consent notice before enrollment; media goes browser -> local
 server only; nothing is uploaded elsewhere.
 
+Design system (UI3, 2026-10-15, user brief "premium iPhone-inspired glassmorphism"):
+  Tokens: src/index.css CSS variables for light + dark (background #F5F7FB /
+  #EBF0F8 with soft blue-lavender ambient gradients; glass surface
+  rgba(255,255,255,0.62) + border rgba(255,255,255,0.75); text #172033);
+  tailwind.config.js palette primary (500 = #6485E8) and accent (500 =
+  #9B8AFB), system SF-style font stack, glass shadows, shimmer / fade /
+  slide keyframes. Contrast checked (WCAG AA): white on #6485E8 is only
+  3.4:1, so filled buttons use primary-600 #4F6FD8 -> accent-600 #6E5CE6
+  (>= 4.5:1); muted text #5B6579 (5.4:1) and helper text #646F86 (4.7:1)
+  instead of #68738A (4.4:1); success / warning / error #34C78A / #F3B85B /
+  #F07178 are used as tints, icons and dots, with darker text shades.
+  Glass: .glass / .glass-strong use backdrop-filter blur(20-24px) inside
+  @supports, with an opaque fallback colour otherwise; cards are glass,
+  radius 24 px, buttons / inputs 16-20 px.
+  Components (all existing class names kept, restyled): .btn + primary /
+  accent / secondary / outline / ghost / danger / sm / icon (44 px touch
+  targets, hover brightness, press scale, focus ring, disabled), .input
+  (+ aria-invalid), .label / .field-hint, .checkbox, .tone-* (success /
+  warning / danger / info / accent / neutral tinted glass) used by
+  .alert-*, .badge-*, .stat-*, .segmented + .tab-* (iOS segmented control),
+  .track / .track-fill (progress and meters), .table-*, .icon-chip,
+  .eyebrow, .media-frame, .skeleton (shimmer), chart tokens.
+  New components: ui/Skeleton.jsx (Skeleton, SkeletonText,
+  SkeletonStatGrid, ReportSkeleton shaped like the results page),
+  ui/EmptyState.jsx (icon chip, title, description, optional action).
+  Screens: App.jsx floating glass header with pill step indicator (desktop)
+  and "Step n of 3" progress bar (mobile, previously hidden), skip link,
+  per-step slide-in, footer. Enrollment: labelled Candidate ID with a
+  specific placeholder (e.g. 21BCE1234) + hint, passage skeleton while
+  loading, gradient mic meter, segmented photo source, designed voice
+  empty state. Test: frosted monitor badges over the video (dot + label,
+  readable on any image), idle overlay with its own Start button, tinted
+  evidence tiles, drop zone, progress bar with role=progressbar, and a
+  results-shaped skeleton while the report is built after Stop. Results:
+  glass verdict card with tone chip + accent bar, frosted chart tooltips,
+  rounded chart bars, token-coloured scoring bars, evidence images with
+  a designed fallback (never a broken image), empty states for charts /
+  evidence / audio, "—" for missing values, collapsible table with a
+  chevron. Alerts: tinted cards, "All clear" empty state.
+  Motion 150-250 ms; everything is disabled under prefers-reduced-motion.
+  No modal, toast, settings or profile screens exist in this app, so none
+  were added. Lint: the existing no-unused-vars exemption for capitalised
+  (JSX component) names was extended to parameters (argsIgnorePattern);
+  the committed code already failed this rule (3 errors) for that reason.
+
 Layout + theme (UI2, 2026-10-14):
   App.jsx renders a sticky header on every screen: product name, a step
   indicator (Enrollment -> Test -> Results, lucide icons UserCheck / Video /

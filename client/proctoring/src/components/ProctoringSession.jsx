@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import StatusIndicator from './StatusIndicator';
 import AlertPanel from './AlertPanel';
+import { ReportSkeleton } from './ui/Skeleton';
 
 // Test screen (flow.txt PART II-D, D.2).
 //  Live: webcam + mic go to the server over WebRTC; the server answers with one JSON status per video
@@ -19,6 +20,7 @@ const STATE_STYLE = {
   na: 'badge-muted',
 };
 const STATE_WORD = { ok: 'OK', warn: 'check', bad: 'VIOLATION', na: 'n/a' };
+const STATE_DOT = { ok: 'bg-[#34C78A]', warn: 'bg-[#F3B85B]', bad: 'bg-[#F07178]', na: 'bg-white/40' };
 const WARNING_TEXT = {
   camera_black: 'The camera image is black: the lens may be covered, a privacy shutter closed, or camera access blocked (Windows Settings > Privacy & security > Camera).',
   mic_silent: 'The microphone is silent: it may be muted or blocked (Windows Settings > Privacy & security > Microphone). Audio cannot be monitored.',
@@ -39,18 +41,16 @@ const EvidenceCounters = ({ evidence }) => (
     {EVIDENCE_GROUPS.map(([key, label, Icon]) => {
       const c = evidence?.[key] || { count: 0, threshold: '-', exceeded: false };
       return (
-        <div key={key} className={`rounded-lg p-3 ring-1 ${c.exceeded
-          ? 'bg-red-50 ring-red-200 text-red-900 dark:bg-red-950/50 dark:ring-red-900 dark:text-red-100'
-          : 'surface-muted ring-slate-200 dark:ring-slate-800'}`}>
-          <p className="text-xs font-medium opacity-80 inline-flex items-center gap-1"><Icon className="w-4 h-4" /> {label}</p>
+        <div key={key} className={`rounded-2xl p-3.5 transition-colors duration-200 ${c.exceeded ? 'tone-danger' : 'tone-neutral'}`}>
+          <p className="text-xs font-medium inline-flex items-center gap-1.5"><Icon className="w-4 h-4" /> {label}</p>
           {c.percentage != null ? (
             <>
-              <p className="text-xl font-bold">{c.percentage.toFixed(1)}%<span className="text-sm font-normal opacity-70"> / {c.limit_text}</span></p>
+              <p className="text-xl font-semibold tabular-nums mt-1" style={c.exceeded ? undefined : { color: 'var(--text)' }}>{c.percentage.toFixed(1)}%<span className="text-xs font-normal opacity-75"> / {c.limit_text}</span></p>
               <p className="text-xs opacity-80">{c.count} event(s){c.exceeded ? ' · limit exceeded' : ''}</p>
             </>
           ) : (
             <>
-              <p className="text-xl font-bold">{c.count}<span className="text-sm font-normal opacity-70"> / {c.threshold}</span></p>
+              <p className="text-xl font-semibold tabular-nums mt-1">{c.count}<span className="text-xs font-normal opacity-75"> / {c.threshold}</span></p>
               <p className="text-xs opacity-80">{c.exceeded ? 'limit exceeded' : 'events / limit'}</p>
             </>
           )}
@@ -77,20 +77,27 @@ const waitForIceGathering = (pc, timeoutMs = 3000) =>
     setTimeout(done, timeoutMs);
   });
 
-const MonitorBadges = ({ monitors, audio }) => {
+const MonitorBadges = ({ monitors, audio, overlay = false }) => {
   const items = [
     ...Object.entries(monitors || {}),
     ...Object.entries(audio?.monitors || {}),
   ];
   if (!items.length) return null;
   return (
-    <div className="flex flex-wrap gap-2">
-      {items.map(([key, m]) => (
-        <div key={key} className={`badge text-xs shadow-sm ${STATE_STYLE[m.state] || STATE_STYLE.na}`} title={m.detail}>
+    <div className="flex flex-wrap gap-1.5">
+      {items.map(([key, m]) => (overlay ? (
+        <div key={key} title={m.detail}
+          className="badge text-[0.7rem] text-white bg-black/45 backdrop-blur-md ring-1 ring-white/15">
+          <span className={`dot ${STATE_DOT[m.state] || STATE_DOT.na}`} aria-hidden="true" />
+          <span className="font-semibold">{m.label}</span>
+          <span className="opacity-80">{STATE_WORD[m.state] || m.state}</span>
+        </div>
+      ) : (
+        <div key={key} className={`badge ${STATE_STYLE[m.state] || STATE_STYLE.na}`} title={m.detail}>
           <span className="font-semibold">{m.label}</span> {STATE_WORD[m.state] || m.state}
           <span className="opacity-75 font-normal">· {m.detail}</span>
         </div>
-      ))}
+      )))}
     </div>
   );
 };
@@ -258,13 +265,27 @@ const ProctoringSession = ({ candidate, onFinished, onReset }) => {
   const fmtTime = (s) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
   const modeLocked = phase !== 'idle' || (job && job.status !== 'error');
 
+  if (phase === 'stopping') {
+    return (
+      <div className="space-y-6">
+        <div className="alert alert-info" role="status">
+          <Loader className="w-5 h-5 flex-shrink-0 animate-spin" />
+          <span><span className="font-semibold">Session ended.</span> Building your report: analysing the recording,
+            scoring violations and saving the evidence. This can take a moment.</span>
+        </div>
+        <ReportSkeleton />
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-4">
         <div>
-          <h1 className="page-title">Proctored test</h1>
-          <p className="text-muted mt-1">
-            Candidate <span className="font-semibold text-slate-900 dark:text-slate-100">{candidate}</span> · live video and audio monitoring
+          <p className="eyebrow">Step 2 · Exam</p>
+          <h1 className="page-title mt-1">Proctored test</h1>
+          <p className="text-muted mt-1.5">
+            Candidate <span className="font-semibold" style={{ color: 'var(--text)' }}>{candidate || '—'}</span> · live video and audio monitoring
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
@@ -278,7 +299,7 @@ const ProctoringSession = ({ candidate, onFinished, onReset }) => {
           ) : (
             <button onClick={stopLive} disabled={phase !== 'running'} className="btn btn-danger">
               {phase === 'stopping' || phase === 'connecting' ? <Loader className="w-4 h-4 animate-spin" /> : <Square className="w-4 h-4" />}
-              {phase === 'stopping' ? 'Building report...' : phase === 'connecting' ? 'Connecting...' : 'Stop session'}
+              {phase === 'stopping' ? 'Building report…' : phase === 'connecting' ? 'Connecting…' : 'Stop session'}
             </button>
           ))}
           <button onClick={handleReset} className="btn btn-secondary">
@@ -287,7 +308,7 @@ const ProctoringSession = ({ candidate, onFinished, onReset }) => {
         </div>
       </div>
 
-      <div className="inline-flex gap-1 p-1 rounded-lg surface-muted" role="tablist" aria-label="Test mode">
+      <div className="segmented max-w-full overflow-x-auto" role="tablist" aria-label="Test mode">
         {[['live', 'Live (webcam + microphone)', Video], ['recorded', 'Recorded video', Upload]].map(([key, label, Icon]) => (
           <button
             key={key}
@@ -295,7 +316,7 @@ const ProctoringSession = ({ candidate, onFinished, onReset }) => {
             aria-selected={mode === key}
             onClick={() => setMode(key)}
             disabled={modeLocked}
-            className={`tab ${mode === key ? 'tab-active' : 'tab-idle'}`}
+            className={`tab whitespace-nowrap ${mode === key ? 'tab-active' : 'tab-idle'}`}
           >
             <Icon className="w-4 h-4" /> {label}
           </button>
@@ -320,30 +341,33 @@ const ProctoringSession = ({ candidate, onFinished, onReset }) => {
 
           {mode === 'live' ? (
             <div className="card space-y-4">
-              <div className="relative bg-slate-900 rounded-lg overflow-hidden aspect-video ring-1 ring-slate-200 dark:ring-slate-800">
+              <div className="media-frame">
                 <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" style={{ transform: 'scaleX(-1)' }} />
                 {phase === 'idle' && (
-                  <div className="absolute inset-0 flex items-center justify-center bg-slate-950/70">
-                    <div className="text-center text-white px-6">
-                      <Video className="w-14 h-14 mx-auto mb-3 opacity-70" />
-                      <p className="text-lg font-medium">Session not active</p>
-                      <p className="text-sm opacity-75 mt-1">Click "Start session". Look at the screen for the first few seconds while the system calibrates.</p>
+                  <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-[#141B33]/90 to-[#221B45]/90">
+                    <div className="text-center text-white px-6 max-w-md">
+                      <span className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-white/10 ring-1 ring-white/15 mb-4">
+                        <Video className="w-7 h-7" />
+                      </span>
+                      <p className="text-lg font-medium">Ready when you are</p>
+                      <p className="text-sm text-white/75 mt-1.5">Press “Start session”, then look at the screen for the first few seconds while the system calibrates.</p>
+                      <button onClick={startLive} className="btn btn-primary mt-5"><Play className="w-4 h-4" /> Start session</button>
                     </div>
                   </div>
                 )}
                 {running && (
-                  <span className="absolute bottom-3 left-3 badge bg-red-600 text-white text-xs">
-                    <span className="w-2 h-2 rounded-full bg-white animate-pulse" /> LIVE {fmtTime(elapsed)}
+                  <span className="absolute bottom-3 left-3 badge text-white bg-[#E2525B]/90 backdrop-blur-md shadow-glass tabular-nums">
+                    <span className="dot bg-white animate-pulse" aria-hidden="true" /> LIVE {fmtTime(elapsed)}
                   </span>
                 )}
                 {running && status && (
                   <div className="absolute top-3 left-3 right-3">
-                    <MonitorBadges monitors={status.monitors} audio={status.audio} />
+                    <MonitorBadges monitors={status.monitors} audio={status.audio} overlay />
                   </div>
                 )}
               </div>
               {running && (
-                <div className="grid grid-cols-3 gap-3 text-center">
+                <div className="grid grid-cols-3 gap-3">
                   <div className="stat stat-blue">
                     <p className="stat-label inline-flex items-center gap-1"><Clock className="w-4 h-4" /> Elapsed</p>
                     <p className="stat-value">{fmtTime(elapsed)}</p>
@@ -361,7 +385,7 @@ const ProctoringSession = ({ candidate, onFinished, onReset }) => {
               )}
               {running && (
                 <div>
-                  <p className="text-sm font-medium text-muted mb-2">Evidence counters (events / limit)</p>
+                  <p className="text-sm font-medium text-muted mb-2.5">Evidence counters · share of the session vs limit</p>
                   <EvidenceCounters evidence={status?.evidence} />
                 </div>
               )}
@@ -370,13 +394,14 @@ const ProctoringSession = ({ candidate, onFinished, onReset }) => {
             <div className="card space-y-5">
               <div>
                 <h2 className="card-title">Analyse a recorded exam video</h2>
-                <p className="text-sm text-muted mt-1">The video (and optionally its audio track) is analysed on this computer with the same checks as a live session.</p>
+                <p className="text-sm text-muted mt-1.5">The video (and optionally its audio track) is analysed on this computer with the same checks as a live session.</p>
               </div>
-              <label className={`flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed p-8 text-center transition-colors cursor-pointer
-                border-slate-300 hover:border-primary-500 dark:border-slate-700 dark:hover:border-primary-400 ${modeLocked ? 'pointer-events-none opacity-60' : ''}`}>
-                <FileVideo className="w-10 h-10 text-slate-400" />
-                <span className="font-medium">{file ? file.name : 'Choose a video file'}</span>
-                <span className="text-xs text-subtle">{file ? `${(file.size / 1024 / 1024).toFixed(1)} MB` : 'MP4, WebM, AVI, MOV...'}</span>
+              <label className={`group flex flex-col items-center justify-center gap-2.5 rounded-2xl border-2 border-dashed p-8 text-center
+                transition-all duration-200 cursor-pointer surface-muted border-[var(--hairline)] hover:border-primary-500/70 hover:bg-primary-500/5
+                focus-within:ring-4 ${modeLocked ? 'pointer-events-none opacity-60' : ''}`} style={{ '--tw-ring-color': 'var(--ring)' }}>
+                <span className="icon-chip w-12 h-12 rounded-2xl transition-transform duration-200 group-hover:-translate-y-0.5"><FileVideo className="w-6 h-6" /></span>
+                <span className="font-medium break-all">{file ? file.name : 'Drop a video here or click to browse'}</span>
+                <span className="text-xs text-subtle">{file ? `${(file.size / 1024 / 1024).toFixed(1)} MB` : 'MP4, WebM, AVI or MOV'}</span>
                 <input type="file" accept="video/*" className="hidden" onChange={(e) => setFile(e.target.files[0] || null)} disabled={!!job && job.status !== 'error'} />
               </label>
               <label className="flex items-center gap-2 text-sm cursor-pointer">
@@ -389,11 +414,11 @@ const ProctoringSession = ({ candidate, onFinished, onReset }) => {
               {job && job.status !== 'error' && (
                 <div>
                   <div className="flex justify-between text-sm text-muted mb-1">
-                    <span>{job.status === 'uploading' ? 'Uploading...' : `Analysing ${job.t ?? 0} / ${job.duration ?? '?'} s`}</span>
-                    <span className="font-mono">{Math.round(100 * (job.progress || 0))}%</span>
+                    <span>{job.status === 'uploading' ? 'Uploading…' : `Analysing ${job.t ?? 0} / ${job.duration ?? '?'} s`}</span>
+                    <span className="font-mono tabular-nums">{Math.round(100 * (job.progress || 0))}%</span>
                   </div>
-                  <div className="h-2 rounded-full bg-slate-200 dark:bg-slate-800 overflow-hidden">
-                    <div className="h-2 bg-primary-600 rounded-full transition-all" style={{ width: `${100 * (job.progress || 0)}%` }} />
+                  <div className="track" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(100 * (job.progress || 0))} aria-label="Analysis progress">
+                    <div className="track-fill" style={{ width: `${100 * (job.progress || 0)}%` }} />
                   </div>
                   {job.monitors && <div className="mt-4"><MonitorBadges monitors={job.monitors} /></div>}
                 </div>
