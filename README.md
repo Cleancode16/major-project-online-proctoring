@@ -1010,7 +1010,7 @@ sequenceDiagram
     FN->>FN: promote weak hits, k-of-n filter (1 s window) -> run
     FN->>FN: buffer: merge + confirm (>= 1 s, >= 2 samples) -> prohibited_object-001
     FN->>FN: fusion: quality, family "objects", relations, points (critical, floor 17.5)
-    FN->>FN: verdict + assessment; evidence item (snapshot) linked to the event ID
+    FN->>FN: verdict + assessment, evidence item (snapshot) linked to the event ID
 ```
 
 ### 9.3 Raw media to results
