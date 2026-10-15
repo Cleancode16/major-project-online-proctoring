@@ -54,8 +54,8 @@ This project monitors a candidate's **webcam and microphone** during an exam, de
 | Stage | What happens |
 |---|---|
 | **Inputs** | A reference face photo and a 25 s voice recording (enrollment); then either a **live** webcam + microphone stream (WebRTC) or an **uploaded exam video** (with its audio track). |
-| **Processing** | Server-side Python pipeline: face detection and verification, anti-spoofing, head pose, eye gaze, person and object detection (video, sampled up to 10 frames/s); voice activity, speaker verification, whispering and sound-event detection (audio). Per-sample flags are smoothed, filtered for persistence and turned into time-stamped events. |
-| **Outputs** | A report with per-violation statistics, a 0–100 violation score, a verdict (VALID / SUSPICIOUS / INVALID) with reasons, a timeline, evidence (annotated snapshots, WAV clips), session-violation counters and PDF / Word exports. |
+| **Processing** | Server-side Python pipeline: face detection and verification, anti-spoofing, head pose (candidate-specific adaptive thresholds), eye gaze, person and object detection (video, sampled up to 10 frames/s); voice activity, speaker verification, whispering and sound-event detection (audio). Per-sample flags are smoothed and filtered for persistence. A tolerance buffer then merges and confirms them into time-stamped events, and an evidence-fusion engine de-duplicates correlated signals and explains every event (Section 7). |
+| **Outputs** | A report with per-violation statistics and a 0–100 risk score. It also contains: <ul><li>a verdict (VALID / SUSPICIOUS / INVALID) with reasons;</li><li>a separate assessment status (COMPLETE / REVIEW_REQUIRED / INCONCLUSIVE) and review priority;</li><li>every event record (confirmed, uncertain, filtered, unavailable) with its reason and score contribution;</li><li>evidence (annotated snapshots, WAV clips) linked to the events;</li><li>session-violation counters and PDF / Word exports.</li></ul> |
 
 ### Intended users and use cases
 
@@ -74,11 +74,10 @@ This project monitors a candidate's **webcam and microphone** during an exam, de
 ### Current implementation status
 
 All features in Section 2 marked *Implemented* exist in the code and are wired end to end. Important caveats:
-- **Test results are historical.** The recorded automated test results (`server/tests/results/SUMMARY.md`, dated 2026-10-14 18:23) **predate** several later changes:
-  - L2CS-Net gaze, MiniFASNet anti-spoofing and 10 fps sampling;
-  - the voice-rule changes and the new scoring.
-  
-  Those results therefore do not cover the current code (see Section 16).
+- **Tests were only partly re-run.** On 2026-10-15, after the tolerance buffer, adaptive head pose and evidence fusion were added, the aggregation, legacy, server, head-pose, calibration and sampling scripts passed.
+  - The end-to-end script still fails two checks and the audio-monitor script fails one, for reasons that predate those changes.
+  - The other scripts were not re-run, and `tests/results/SUMMARY.md` was not regenerated (Section 16).
+- **The buffer, adaptive head-pose and fusion settings are starting values for evaluation.** Their effect on false positives has not been measured on labelled recordings.
 - **Several accuracy figures come from simulations or small samples**, and the code comments say so: speaker thresholds on LibriSpeech with a simulated channel, and anti-spoof real-face scores on a handful of images.
 - **Not measured:** attack recall for anti-spoofing, and live end-to-end accuracy.
 
@@ -98,7 +97,7 @@ All features in Section 2 marked *Implemented* exist in the code and are wired e
 | Face detection / presence | MediaPipe face detection; `FACE_NOT_VISIBLE` violation | Implemented | `server/video/face.py:detect_faces`, `server/video/pipeline.py` |
 | Identity verification | FaceNet embedding vs reference (cosine ≥ 0.415) with majority vote | Implemented | `server/video/face.py:compare`, `pipeline.py:_flag_identity` |
 | Face anti-spoofing | MiniFASNet real-face score; `FACE_SPOOF` violation | Implemented (attack recall not measured) | `server/video/antispoof.py`, `server/video/minifasnet.py`, `pipeline.py:_flag_spoof` |
-| Facial landmarks + head pose | MediaPipe Face Mesh; person-specific landmark template (Kabsch) with PnP for calibration | Implemented | `server/video/head_pose.py`, `pipeline.py:_flag_pose` |
+| Facial landmarks + head pose | MediaPipe Face Mesh; person-specific landmark template (Kabsch) with PnP for calibration; candidate-specific adaptive thresholds (HP3) | Implemented | `server/video/head_pose.py`, `pipeline.py:_calibrate_thresholds, _flag_pose, _adapt_pose` |
 | Eye gaze | L2CS-Net (ResNet50, Gaze360) yaw/pitch vs calibrated forward gaze; iris-landmark fallback | Implemented | `server/video/l2cs.py`, `server/video/gaze.py`, `pipeline.py:_flag_gaze_l2cs` |
 | Multiple-person detection | YOLOv8s persons fused with MediaPipe faces; photo/poster rejection; arm/hand rejection | Implemented | `server/video/detectors.py:count_persons`, `pipeline.py:_mark_static_faces` |
 | Prohibited-object detection | YOLOv8s COCO classes: cell phone, book, laptop, tv ("extra screen"), plus a second pass around the face | Implemented | `server/video/detectors.py:objects_v2, run_yolo_roi` |
@@ -106,10 +105,14 @@ All features in Section 2 marked *Implemented* exist in the code and are wired e
 | Voice activity detection | Silero VAD (webrtcvad fallback) with high-pass filter, SNR and YAMNet confirmation | Implemented | `server/audio/vad.py`, `server/audio/monitor.py:validate_segments` |
 | Speaker verification / multiple speakers | Resemblyzer d-vectors vs enrollment + session-adapted print | Implemented | `server/audio/monitor.py`, `server/audio/speaker.py` |
 | Whispering / suspicious sounds | YAMNet categories + voicing cue | Implemented | `server/audio/yamnet.py`, `server/audio/monitor.py:_raw_flags` |
-| Real-time alerts | Live monitors, alerts, counters, warnings pushed per sample | Implemented | `webrtc_session.py:_process_video/_process_audio`, `AlertPanel.jsx` |
-| Risk scoring and verdict | Points per violation (severity-based), critical overrides, verdict with explanations | Implemented | `server/aggregation/aggregate.py`, `server/config.py:aggregation` |
-| Evidence package + session violation | Snapshots / WAV clips per group; percentage or count limits; local evidence "upload" | Implemented | `server/aggregation/evidence.py` |
-| Reports (JSON / PDF / Word) | Report on disk; PDF and DOCX built on download | Implemented | `server/aggregation/report.py`, `pdf_report.py`, `docx_report.py` |
+| Real-time alerts | Live monitors, warnings and evidence counters pushed per sample. Alerts carry a stable `event_id` and move provisional → confirmed → ended; only confirmed events are counted. | Implemented | `webrtc_session.py:_live_event`, `AlertPanel.jsx`, `ProctoringSession.jsx:handleStatus` |
+| Tolerance buffer (BUF1) | Per-type merging, confirmation (duration + support), grace budget, coverage check | Implemented | `server/aggregation/buffer.py`, `config.buffer` |
+| Evidence fusion (FUS1) | Common event schema, evidence families with priority de-duplication, relations / corroboration, per-event score contributions, filtered and unavailable records | Implemented | `server/aggregation/fusion.py`, `config.fusion` |
+| Risk scoring and verdict | Points per violation (severity-based) from confirmed events, critical floor / overrides only for adequately observed evidence, verdict with explanations | Implemented | `server/aggregation/aggregate.py`, `server/config.py:aggregation` |
+| Assessment and review status | COMPLETE / REVIEW_REQUIRED / INCONCLUSIVE, review priority, missing checks, limitations (separate from the verdict) | Implemented | `fusion.py:assess`, `report.py:_limitations` |
+| Evidence package + session violation | Snapshots / WAV clips per group from confirmed events only; items linked to event IDs; percentage or count limits; local evidence "upload" | Implemented | `server/aggregation/evidence.py` |
+| Reports (JSON / PDF / Word) | Report on disk; PDF and DOCX built on download, with an "Assessment and evidence fusion" section and an event table | Implemented | `server/aggregation/report.py`, `pdf_report.py`, `docx_report.py` |
+| User interface | Sidebar + top-bar layout; light ("Warm Neutral") and dark ("Graphite") themes from shared tokens; frosted glass only on floating layers; responsive from 360 px; larger touch targets | Implemented | `client/proctoring/src/index.css`, `tailwind.config.js`, `App.jsx` |
 | Report listing API | List stored reports | Implemented (API only; no UI page uses it) | `server/server.py:reports_list` |
 | Authentication / authorization | — | **Not implemented** | — |
 | Database | — | **Not implemented** (file storage only) | — |
@@ -134,18 +137,18 @@ Online-Proctoring-System/
 ├── client/proctoring/            React frontend (Vite)
 │   ├── package.json              Scripts: dev, build, lint, preview
 │   ├── vite.config.js            Dev proxy /api -> http://localhost:5000
-│   ├── tailwind.config.js        Design tokens (palette, fonts, shadows, animations)
+│   ├── tailwind.config.js        Colour utilities mapped to the CSS-variable tokens, radius / type scale
 │   ├── eslint.config.js          ESLint 9 flat config
-│   ├── index.html                Root page; applies saved light/dark theme before first paint
+│   ├── index.html                Root page; applies the saved (or OS) light/dark theme before first paint
 │   └── src/
 │       ├── main.jsx              React entry point
-│       ├── App.jsx               App shell: header, step indicator, theme toggle, step state machine
-│       ├── index.css             Design system (CSS variables, glass components, states)
+│       ├── App.jsx               App shell: sidebar (workflow steps), glass top bar (breadcrumb, candidate, theme toggle), step state
+│       ├── index.css             Design system UI4: light / dark tokens, components, glass materials, touch + reduced-motion rules
 │       └── components/
 │           ├── SetupScreen.jsx       Enrollment: consent, reference photo, voice recording
 │           ├── ProctoringSession.jsx Test: live WebRTC session or recorded-video upload
-│           ├── Statistics.jsx        Results: verdict, scoring, charts, evidence, downloads
-│           ├── AlertPanel.jsx        Live alert list
+│           ├── Statistics.jsx        Results: verdict, evidence fusion, scoring, violation analysis, charts, evidence, downloads
+│           ├── AlertPanel.jsx        Live alerts (provisional / confirmed / not confirmed, merged by event_id)
 │           ├── StatusIndicator.jsx   Connection / calibration pills
 │           ├── index.js              Barrel exports
 │           └── ui/Skeleton.jsx, ui/EmptyState.jsx   Loading and empty-state components
@@ -179,7 +182,9 @@ Online-Proctoring-System/
     │   ├── passages.py           Reading passages for enrollment
     │   └── io.py                 Audio decoding (bundled ffmpeg), source status, recording helpers
     ├── aggregation/
-    │   ├── aggregate.py          Per-type statistics, scoring, verdict, group percentages
+    │   ├── aggregate.py          Per-type statistics, scoring, verdict, group percentages; runs buffer + fusion
+    │   ├── buffer.py             BUF1 tolerance buffer: merge, confirm, grace, coverage, evidence strength
+    │   ├── fusion.py             FUS1 evidence fusion: event schema, families, relations, point split, assessment
     │   ├── denominators.py       Which samples count towards each violation type
     │   ├── events.py             Flags -> time-stamped events
     │   ├── evidence.py           Evidence package, counters, session violation, evidence store
@@ -214,7 +219,7 @@ flowchart LR
         AEX["Audio executor thread<br/>AudioAnalyzer"]
         JOB["Job threads<br/>recorded-video analysis"]
         MODELS["In-process models<br/>MediaPipe, FaceNet, MiniFASNet,<br/>L2CS-Net, YOLOv8s, Silero, YAMNet, Resemblyzer"]
-        AGG["Aggregation<br/>stats, score, verdict, evidence"]
+        AGG["Aggregation<br/>stats, buffer, evidence fusion,<br/>score, verdict, assessment, evidence"]
     end
 
     FS[("server/data/<br/>enrollment, reports, uploads,<br/>evidence_uploads")]
@@ -248,7 +253,7 @@ flowchart LR
 | asyncio loop + `LiveSession` | Accepts the WebRTC offer, receives tracks, schedules analysis, sends status over the data channel | `server/webrtc_session.py` |
 | `VideoAnalyzer` | Per-sample video pipeline and offline finalisation | `server/video/pipeline.py` |
 | `AudioAnalyzer` | Streaming VAD + YAMNet, offline speaker / event analysis | `server/audio/monitor.py` |
-| Aggregation | Statistics, scoring, verdict, evidence, report files | `server/aggregation/*` |
+| Aggregation | Statistics, tolerance buffer, evidence fusion, scoring, verdict, assessment, evidence, report files | `server/aggregation/*` |
 | File storage | Enrollment references, reports, evidence | `server/data/` |
 
 **How data travels**
@@ -314,7 +319,7 @@ flowchart TD
     O --> Q{"First samples?"}
     Q -- "calibration (3-10 s)" --> Q1["Build baseline: head-pose template,<br/>forward gaze"] --> O
     Q -- "analysis" --> S{"Raw flag?<br/>no face / multiple persons /<br/>identity mismatch / object / spoof / away"}
-    S -- "yes" --> S1["Live debounce (1 s) -> alert,<br/>counters, snapshot kept"]
+    S -- "yes" --> S1["Live debounce (1 s) -> provisional alert (event_id);<br/>confirmed after the type's confirm_s, then ended;<br/>snapshot kept"]
     S -- "no" --> T["Status message over data channel"]
     S1 --> T
     P --> T
@@ -322,8 +327,9 @@ flowchart TD
     U -- "no" --> O
     U -- "yes" --> V["POST /api/session/:id/stop"]
     V --> W["Finalize: offline smoothing + persistence,<br/>audio analysis, events"]
-    W --> X["Score, verdict, evidence, counters,<br/>evidence store, report.json + report.pdf"]
-    X --> Z["Results screen: verdict, scoring, charts,<br/>evidence, PDF / Word / JSON download"]
+    W --> W2["Tolerance buffer (merge, confirm)<br/>+ evidence fusion (families, relations)"]
+    W2 --> X["Score, verdict, assessment, evidence, counters,<br/>evidence store, report.json + report.pdf"]
+    X --> Z["Results screen: verdict, evidence fusion, scoring,<br/>charts, evidence, PDF / Word / JSON download"]
 ```
 
 **Stage-by-stage explanation**
@@ -341,13 +347,13 @@ flowchart TD
 | 9 | Face detection + identity | Frame → faces, subject, cosine score, majority-voted identity | `pipeline.py:process`, `face.py` | No face → `FACE_NOT_VISIBLE` raw flag |
 | 10 | Anti-spoofing | Subject face → real-face score, 1 s mean | `pipeline.py:_flag_spoof` | Model missing → not checked, report warning |
 | 11 | Landmarks, pose, gaze | Face Mesh → pose (deg), L2CS gaze (deg) | `head_pose.py`, `l2cs.py`, `pipeline.py` | Mesh not matching the subject → no pose/gaze for the sample |
-| 12 | Calibration | First 3 s (≥5 accepted, max 10 s) → baseline pose, head template, forward gaze | `pipeline.py:_calibration_add` | Fallback baseline after 10 s; gaze baseline collected later if gaze samples were implausible |
+| 12 | Calibration | First 3 s (≥5 accepted, max 10 s) → baseline pose, head template, forward gaze, adaptive head-pose thresholds | `pipeline.py:_calibration_add, _calibrate_thresholds` | Fallback baseline after 10 s; fixed head-pose thresholds with "reduced" confidence when calibration quality is insufficient; gaze baseline collected later if gaze samples were implausible |
 | 13 | Scene | Frame → persons, objects (YOLOv8s + ROI pass) | `pipeline.py:_flag_scene`, `detectors.py` | — |
 | 14 | Audio processing | Audio → VAD probabilities, YAMNet scores, live speaker similarity | `audio/monitor.py`, `webrtc_session.py:_process_audio` | Silent source → warning `mic_silent` |
-| 15 | Live debounce + alerts | Raw flags → confirmed flags (1 s), alerts, counters | `webrtc_session.py:_process_video` | — |
+| 15 | Live debounce + alerts | Raw flags → 1 s debounce → live events with stable IDs (provisional → confirmed → ended); counters count confirmed events | `webrtc_session.py:_process_video, _process_audio, _live_event` | Repeated updates of one event replace its entry in the client |
 | 16 | Termination | Stop request → peer connection closed, executors drained | `LiveSession.stop` | 404 for unknown session; 500 if the report fails |
 | 17 | Finalisation | Samples → smoothed flags, persistence-filtered events; full-session audio analysis | `pipeline.py:finalize`, `monitor.py:finalize` | — |
-| 18 | Results | Stats → score, verdict, evidence, counters, files | `aggregation/*` | PDF failure is logged, never breaks the JSON report |
+| 18 | Results | Stats → buffer → fusion → score, verdict, assessment, evidence, counters, files | `aggregation/*` | PDF failure is logged, never breaks the JSON report |
 
 ---
 
@@ -449,7 +455,7 @@ No model in this repository is trained or fine-tuned by the project. All learned
 
     Adaptation stays frozen for `recovery_s` afterwards. Because of this gate, a sustained head turn cannot become the baseline, and large movements cannot raise the thresholds.
 - **Output**: raw / final `HEAD_POSE_DEVIATION`. Per sample: `rel_yaw`, `rel_pitch`, `rel_roll`, `raw_rel_*`, `pose_thr` (the threshold in force), `pose_fit_residual`, `pose_quality_issues` and `pose_adapt`. Per session: `video.head_pose` holds calibration status, confidence, accepted / rejected samples, baseline, variability, initial and final thresholds, drift, per-axis deviation statistics, measured / unavailable duration, observation quality and adaptation counts.
-- **Gaze correlation**: gaze time that overlaps confirmed head-pose time is scored once (`buffer.policies.GAZE_AWAY.correlated_with`).
+- **Gaze correlation**: gaze time that overlaps confirmed head-pose time is scored once. Both belong to the `head_orientation` evidence family with priority de-duplication (`config.fusion.families`, Section 7.3b).
 
 ### 6.6 Eye gaze — L2CS-Net (active) and iris geometry (fallback)
 
@@ -565,14 +571,14 @@ It must hold for 3 consecutive windows (~1.5 s).
   - Recorded videos are sampled at exactly 10 frames per second of video time — `pipeline.py:iter_sampled_frames`.
   - Live, the newest frame is taken every 0.1 s and frames are dropped while the analyzer is busy. The achieved rate is therefore CPU-bound: plan.md records ~330 ms per sample at 640 × 360 on the dev machine, i.e. ≈ 3 samples/s.
 - **Windows defined in seconds** are converted to sample counts at the actual rate (`pipeline.py:windows`). Live analyzers re-measure their rate and resize their smoothers.
-- **Live debounce**: a monitor is "confirmed" after 1 s of consecutive raw hits (`LivePersistence`).
+- **Live debounce**: a monitor turns on after 1 s of consecutive raw hits (`LivePersistence`). That opens a provisional live event, which is confirmed once it lasts the type's `buffer.policies[type].confirm_s` (`webrtc_session.py:_live_event`).
 - **Final events**: offline smoothing, then `filter_runs(min_len, max_gap)` per type, then events (`aggregation/events.py`).
 
 ---
 
 ## 7. Scoring Methodology and Suspicious Activity Assessment
 
-Source: `server/aggregation/aggregate.py` (`video_stats`, `audio_stats`, `score_violation`, `score_and_verdict`, `group_percentages`), `server/aggregation/evidence.py` (`counter`, `counters`, `apply_session_violation`), `server/config.py` (`aggregation`, `evidence`).
+Source: `server/aggregation/aggregate.py` (`video_stats`, `audio_stats`, `score_violation`, `score_and_verdict`, `group_percentages`, `aggregate`), `server/aggregation/buffer.py`, `server/aggregation/fusion.py`, `server/aggregation/evidence.py` (`build_evidence`, `counter`, `counters`, `apply_session_violation`), `server/config.py` (`aggregation`, `buffer`, `fusion`, `evidence`).
 
 ### 7.1 From detections to statistics
 
@@ -588,7 +594,7 @@ Source: `server/aggregation/aggregate.py` (`video_stats`, `audio_stats`, `score_
 4. **Tolerance buffer (BUF1, `aggregation/buffer.py`, config `buffer`)**: applied after step 3, separately for each violation type.
    - *Detection buffer*: step 2 already smooths raw detections. The report counts them as `raw_detection_count` and `filtered_detection_count`, so nothing is hidden.
    - *Violation buffer*: flagged runs closer than `merge_gap_s` are merged. A merged event is **confirmed** only when it lasts at least `confirm_s` and has at least `min_support` flagged samples or windows. Otherwise it is **unconfirmed**: it stays in the timeline with `status` and `buffer_reason`, adds no points, and does not count toward the evidence counters.
-   - *Session buffer*: the first `grace_s` seconds of confirmed time earn no points (0 s for critical types). Time already confirmed for a `correlated_with` type is scored only once, for example gaze during a head turn, or speech that is already a voice violation.
+   - *Session buffer*: the first `grace_s` seconds of confirmed time earn no points (0 s for critical types). Time already confirmed for a higher-priority member of the same evidence family is scored only once (`fusion.correlated_types`, Section 7.3b). Examples: gaze during a head turn, or speech that is already a voice violation.
 
    Per type, the report adds `merged_event_count`, `confirmed_event_count`, `unconfirmed_event_count`, `confirmed_duration_s` / `confirmed_percentage`, `scored_duration_s` / `scored_percentage`, `valid_observation_duration_s`, `unavailable_duration_s`, `evidence_strength` (none / weak / moderate / strong), `review_required`, `buffer_policy`, `validation_metrics` and `calibrated_confidence`.
    - `calibrated_confidence` is always `null`: detector scores are not calibrated, so a score of 0.9 does not mean 90% accuracy.
@@ -605,10 +611,13 @@ With the buffer on (v2 profile), `percentage_i` below is `scored_percentage_i`: 
 ```text
 fraction_i = min(1, percentage_i / saturation_pct_i)
 points_i   = max_points_i × fraction_i
-if severity_i == "critical" and percentage_i > 0:
+if severity_i == "critical" and percentage_i > 0
+   and evidence_strength_i != "weak" and observation_quality_i != "low":
     points_i = max(points_i, critical_floor × max_points_i)        # critical_floor = 0.5
 points_i   = 0 if not measured or percentage_i == 0
 
+# FUS1: points_i are split over type i's confirmed events (by validated time) and each part is
+# multiplied by fusion.quality_weights[event quality] (good 1.0, low 0.8, unknown 1.0)
 score = min(100, Σ points_i)                                         # rounded to 0.1
 ```
 
@@ -633,11 +642,12 @@ score = min(100, Σ points_i)                                         # rounded 
 
 ```mermaid
 flowchart TD
-    S["Per-type statistics + points"] --> C{"Critical override?<br/>pct >= limit OR longest event >= seconds"}
+    S["Confirmed events -> per-type points<br/>(buffer + fusion)"] --> C{"Critical override?<br/>confirmed pct >= limit OR longest confirmed event >= s,<br/>AND evidence not weak AND quality not low"}
     C -- "yes" --> INV["INVALID<br/>(reason per override)"]
+    C -- "limits reached, but weak / low quality" --> RV["override withheld:<br/>violation marked review_required"] --> SC
     C -- "no" --> SC{"score >= 50?"}
     SC -- "yes" --> INV2["INVALID"]
-    SC -- "no" --> R{"score >= 15, OR any critical type has an event,<br/>OR a non-critical type >= its saturation %,<br/>OR audio not monitored?"}
+    SC -- "no" --> R{"score >= 15, OR a type has review_required,<br/>OR a non-critical type >= its saturation % (confirmed),<br/>OR audio not monitored, OR assessment INCONCLUSIVE?"}
     R -- "yes" --> SUS["SUSPICIOUS"]
     R -- "no" --> VAL["VALID"]
     INV --> EV{"Evidence group limit exceeded?"}
@@ -649,12 +659,19 @@ flowchart TD
     EV -- "no" --> DONE["final verdict"]
 ```
 
-With the buffer on, the review step changes in three ways:
-- "any critical type has an event" becomes "a type has `review_required`". That means a critical type has confirmed events with less than strong evidence, or the type has unconfirmed events and its `review_unconfirmed` policy is on.
-- **Assessment coverage** is checked. The verdict carries `assessment_status` = `COMPLETE` or `INCONCLUSIVE`. It is `INCONCLUSIVE` when there is no video, less than `buffer.min_monitored_s` of video, or less than `buffer.min_video_usable_frac` of non-dark samples.
-- An inconclusive session is never VALID. It is reported as SUSPICIOUS with the reason "retest recommended". The three verdict labels stay unchanged for frontend compatibility.
+Notes on the rules (v2 profile, buffer and fusion on):
+- **`review_required`** means one of:
+  - a critical type has confirmed events with less than strong evidence;
+  - a type has unconfirmed events and its `review_unconfirmed` policy is on;
+  - a critical override was withheld because of weak evidence or low observation quality.
+- **Coverage**: the assessment is `INCONCLUSIVE` in any of these cases:
+  - there is no video;
+  - there is less than `buffer.min_monitored_s` of video;
+  - less than `buffer.min_video_usable_frac` of the samples are non-dark;
+  - a check in `fusion.required_checks` (identity, multiple persons, objects) could not be measured.
 
-The `assessment` block in the report summarises the three dimensions: risk score, strongest evidence and coverage.
+  An inconclusive session is never VALID. It is reported as SUSPICIOUS with the reason "retest recommended".
+- The three verdict labels stay unchanged for frontend compatibility. `verdict.assessment_status` (COMPLETE / REVIEW_REQUIRED / INCONCLUSIVE) and `verdict.review_priority` carry the review recommendation separately (Section 7.3b).
 
 Critical overrides (`aggregation.critical`; identity uses a strict `>`):
 
@@ -717,36 +734,44 @@ This is the input case used in `server/tests/test_g1_aggregation.py:stats_math`.
 
 **Input**: 30 video samples at 3/s (3 calibration samples), plus 60 s of audio.
 
-**Points per violation**
+**Points per violation** (with the tolerance buffer; the `percentage` column of the report still shows the flagged share)
 
-| Violation | Observed | Calculation | Points |
-|---|---|---|---|
-| PROHIBITED_OBJECT | 4 of 30 samples = 13.33% | 13.33 / 10 → capped at 1 | 35 |
-| HEAD_POSE_DEVIATION | 3 of 24 = 12.5% | 12.5 / 25 = 0.5 → 0.5 × 10 | 5 |
-| FACE_NOT_VISIBLE | 3 of 30 = 10% | 10 / 20 = 0.5 → 0.5 × 12 | 6 |
-| SPEECH_DETECTED | 8% | 0.4 × 6 | 2.4 |
-| SUSPICIOUS_SOUND | 2.4% | 0.12 × 6 | 0.72 |
+| Violation | Observed | Buffer decision | Calculation | Points |
+|---|---|---|---|---|
+| PROHIBITED_OBJECT | 4 of 30 samples = 13.33% (1.33 s) | confirmed (≥ 1.0 s, ≥ 2 samples) | 13.33 / 10 → capped at 1 | 35 |
+| HEAD_POSE_DEVIATION | 3 of 24 = 12.5% (1.0 s) | unconfirmed (needs 1.5 s) | — | 0 |
+| FACE_NOT_VISIBLE | 3 of 30 = 10% (1.0 s) | unconfirmed (needs 2.0 s) | — | 0 |
+| SPEECH_DETECTED | 4.8 s = 8% | confirmed | 8 / 20 = 0.4 × 6 | 2.4 |
+| SUSPICIOUS_SOUND | 1.44 s = 2.4% | confirmed, but inside the 2 s grace budget | — | 0 |
 
-**Score** = 35 + 5 + 6 + 2.4 + 0.72 = **49.1**.
+**Score** = 35 + 2.4 = **37.4**. Without the buffer it would be 49.1 (35 + 5 + 6 + 2.4 + 0.72).
 
 **Verdict**
-- No critical override applies: objects are at 13.33% (below 15%), and the longest object event is 4 samples ≈ 1.3 s (below 3 s).
+- No critical override applies: objects are at 13.33% (below 15%), and the longest confirmed object event is 1.33 s (below 3 s).
 - The score is below 50 but at least 15, so the verdict is **SUSPICIOUS**.
-- Reasons: the score, plus "PROHIBITED_OBJECT: 1 event(s) … (critical type, below INVALID limits)".
+- Reasons: the score, plus "PROHIBITED_OBJECT: 1 confirmed event(s), 1.3 s, moderate evidence (manual review, below INVALID limits)".
+- The assessment is `REVIEW_REQUIRED`.
 
-The test's expectations were updated to this value, but the test was **not re-run** after the scoring change (Section 16).
+`tests.test_g1_aggregation` checks these values and passed on 2026-10-15.
 
 ### 7.6 Concepts kept separate
 
 | Concept | Meaning | Where |
 |---|---|---|
-| Detection confidence | Model output (e.g. YOLO 0.37, cosine 0.62, real-face 0.91) compared with a threshold | Section 6 |
+| Detection confidence | Model output (e.g. YOLO 0.37, cosine 0.62, real-face 0.91) compared with a threshold. Reported per event only for YOLO / YAMNet; **uncalibrated and not used for scoring** | Section 6, `event.confidence` |
+| Observation quality | Whether the input behind an event was usable (dark frames, unreliable landmarks, too little speech) | `event.observation_quality` |
+| Evidence strength | none / weak / moderate / strong per type, from confirmed events and lighting | `per_violation[type].evidence_strength` |
 | Violation severity | Fixed per type: critical / medium / low / very low | `config.aggregation.severity` |
-| Cumulative score | 0–100 sum of points | `score_and_verdict` |
+| Risk score | 0–100 sum of points from confirmed events | `score_and_verdict`, `event.score_contribution` |
 | Final status | VALID / SUSPICIOUS / INVALID + session-violated flag | `score_and_verdict`, `apply_session_violation` |
+| Assessment / review | COMPLETE / REVIEW_REQUIRED / INCONCLUSIVE + review priority (separate from the verdict) | `fusion.assess` |
 
-**False-positive handling** (implemented):
+**False-positive handling** (implemented; the effect on false-alert rates has not been measured):
 - smoothing, hysteresis and persistence;
+- the tolerance buffer (per-type merging, confirmation and grace budget);
+- evidence-family de-duplication of correlated signals;
+- quality gating of critical rules;
+- candidate-specific head-pose thresholds;
 - photo / poster face rejection and arm rejection for persons;
 - weak-object promotion only next to confident detections;
 - session-adapted speaker print;
@@ -755,9 +780,10 @@ The test's expectations were updated to this value, but the test was **not re-ru
 - low-light warnings.
 
 **Missing or uncertain data**:
-- Unmeasurable types (e.g. no voiceprint → VOICE_MISMATCH) score 0 and are reported as "Not measured".
+- Unmeasurable types (e.g. no voiceprint → VOICE_MISMATCH) score 0, are reported as "Not measured", and appear as `unavailable` event records and in `assessment.missing_checks`.
+- A missing required check makes the assessment INCONCLUSIVE.
 - A silent or unavailable audio source makes the session SUSPICIOUS (`audio_silent_is_suspicious = True`).
-- A missing gaze / anti-spoof model adds a report warning.
+- A missing gaze / anti-spoof model adds a report warning and a `limitations` entry.
 
 ---
 
@@ -792,6 +818,7 @@ classDiagram
         _audio_loop(track)
         _process_video(img, t)
         _process_audio(chunk)
+        _live_event(key, on, t)
         stop()
         _finalize()
     }
@@ -803,6 +830,7 @@ classDiagram
         process(frame, t)
         finalize()
         set_rate(rate)
+        pose_summary()
     }
     class AudioAnalyzer {
         <<audio/monitor.py>>
@@ -844,6 +872,9 @@ classDiagram
     class Aggregation {
         <<modules aggregation/*>>
         aggregate()
+        buffer_apply()
+        fusion_normalize()
+        fusion_finalize()
         score_and_verdict()
         build_report()
         save_report()
@@ -899,8 +930,20 @@ flowchart LR
 | `LiveSession` | Media receive loops, analysis scheduling, live status, finalisation | WebRTC tracks → status messages, report | Exceptions in analyzers are printed and the sample is skipped |
 | `VideoAnalyzer` | Per-sample detection, calibration, flags, offline recompute, persistence | Frames → samples, baseline | Model fallbacks (gaze, anti-spoof) with warnings |
 | `AudioAnalyzer` | Streaming VAD / YAMNet, final speaker / sound analysis | 16 kHz audio → windows, chunks, events | Silent source → status not "ok", no audio stats |
-| `aggregation/*` | Statistics, scoring, verdict, evidence, files | Video + audio results → report | PDF failure is logged only; upload failures are recorded per group |
+| `aggregation/*` | Statistics, buffer, evidence fusion, scoring, verdict, assessment, evidence, files | Video + audio results → report | PDF failure is logged only; upload failures are recorded per group; evidence references only for files that exist |
 | `enrollment_store` | Persist references | Image / embedding / voiceprint → files | Unsafe characters in IDs are replaced |
+
+**Frontend design system (UI4)** (`src/index.css`, `tailwind.config.js`):
+- **Tokens:** every colour is a CSS variable, defined for the light theme ("Warm Neutral") on `:root` and for the dark theme ("Graphite") on `.dark`. Tailwind utilities such as `bg-surface`, `text-fg-muted`, `border-line` and `text-critical` read those variables, so components contain no hex values and no `dark:` variants.
+- **Colours:** neutral surfaces, one muted blue accent, and semantic success / warning / critical / info colours used only for system states.
+- **Glass:** frosted glass (`.glass-header`, `.glass-sidebar`, `.glass-elevated`, `.media-chip`) is used only on floating layers: top bar, sidebar, tooltips, status chips over the video. Cards, tables and forms stay solid. Without backdrop blur, or with `prefers-reduced-transparency`, the glass becomes solid.
+- **Theme:** the theme is toggled in the top bar, saved in `localStorage`, and applied by `index.html` before first paint (no flash).
+- **Responsive layout:**
+  - the sidebar appears from 1024 px; on phones a "Step n of 3" line is shown instead;
+  - charts are drawn at their container's real width;
+  - wide tables scroll inside their card or become card lists on phones;
+  - touch screens get larger controls (`@media (pointer: coarse)`);
+  - reduced-motion preferences are respected.
 
 ---
 
@@ -930,7 +973,7 @@ sequenceDiagram
     loop every analysed video sample (newest frame, up to 10/s)
         LS->>VA: process(frame, t)
         VA-->>LS: sample (raw flags, scores)
-        LS-->>FE: status JSON (monitors, alerts, evidence counters, warnings)
+        LS-->>FE: status JSON (monitors, alert updates with event_id, evidence counters, warnings)
     end
     loop every 0.5 s of audio
         LS->>AA: feed(chunk) + live_status()
@@ -960,12 +1003,14 @@ sequenceDiagram
     VA->>VA: objects_v2: 0.44 >= 0.35, not inside face -> raw PROHIBITED_OBJECT
     VA->>VA: annotated snapshot kept (raw violation)
     VA-->>LS: sample
-    LS->>LS: LivePersistence (1 s of raw hits)
-    LS-->>FE: alert "Prohibited object in view", counters updated
+    LS->>LS: LivePersistence (1 s of raw hits) -> live event live-object-001
+    LS-->>FE: alert {event_id, stage "confirmed"} (object rule: 1 s), counter +1
+    LS-->>FE: alert {event_id, stage "ended"} when the phone disappears
     Note over FN: at session stop
-    FN->>FN: promote weak hits, k-of-n filter (1 s window) -> event
-    FN->>FN: stats -> points (critical, floor 17.5) -> verdict
-    FN->>FN: evidence item (snapshot) + object group exceeded (count > 0)
+    FN->>FN: promote weak hits, k-of-n filter (1 s window) -> run
+    FN->>FN: buffer: merge + confirm (>= 1 s, >= 2 samples) -> prohibited_object-001
+    FN->>FN: fusion: quality, family "objects", relations, points (critical, floor 17.5)
+    FN->>FN: verdict + assessment; evidence item (snapshot) linked to the event ID
 ```
 
 ### 9.3 Raw media to results
@@ -982,8 +1027,11 @@ flowchart LR
     FF --> EVT["Events (start, end, type, details)"]
     FA --> EVT
     EVT --> ST["Per-type stats<br/>%, seconds, counts"]
-    ST --> SC["Points, score, verdict"]
-    EVT --> EVD["Evidence: JPG snapshots, WAV clips"]
+    EVT --> BUF["Tolerance buffer<br/>merge, confirm, grace"]
+    BUF --> FUS["Evidence fusion<br/>schema, families, relations,<br/>filtered + unavailable records"]
+    ST --> SC["Points, score, verdict, assessment"]
+    FUS --> SC
+    FUS --> EVD["Evidence: JPG snapshots, WAV clips<br/>(linked to event IDs)"]
     SC --> RP["report.json (+ PDF on save, PDF/DOCX on download)"]
     EVD --> RP
 ```
@@ -1036,8 +1084,15 @@ Content-Type: application/json
 | Channel / event | Direction | Payload | Trigger | Handler |
 |---|---|---|---|---|
 | WebRTC media tracks | browser → server | camera video, microphone audio (SRTP) | after SDP exchange | `LiveSession._video_loop`, `_audio_loop` |
-| Data channel `status`, message `type: "status"` | server → browser | `{type, t, phase, calibrated, calibration, monitors, counts, alerts[], audio, warnings[], samples, sample_rate_hz, evidence{}, session_violated}` | every analysed video sample | `webrtc_session.py:_process_video` → `_send`; client `ProctoringSession.jsx:handleStatus` |
+| Data channel `status`, message `type: "status"` | server → browser | `{type, t, phase, calibrated, calibration{seconds, accepted, pose_confidence}, monitors, counts, alerts[], audio, warnings[], samples, sample_rate_hz, evidence{}, session_violated}` | every analysed video sample | `webrtc_session.py:_process_video` → `_send`; client `ProctoringSession.jsx:handleStatus` |
 | Data channel message `type: "error"` | server → browser | `{type: "error", message}` | analysis error | client shows the message |
+
+Each `alerts[]` item is one update of a live event:
+- **Fields:** `{type, event_id, stage, status, message, details, t, t_update, duration_s, reason}`.
+- **`stage`:** `provisional` → `confirmed` → `ended`.
+- **`status`:** `provisional`, `confirmed` or `not_confirmed`.
+- **Client:** `handleStatus` replaces the entry with the same `event_id`, so an event appears once.
+- **`counts`:** only confirmed live events are counted.
 
 There is no acknowledgement protocol. Lost status messages are simply superseded by the next one.
 
@@ -1062,15 +1117,19 @@ There is **no database**. State is kept in memory (sessions, jobs) and in files 
 | Key | Contents |
 |---|---|
 | `meta` | `created`, `profile`, `python`, `candidate`, `mode`, `session_id`, live sample rate, processing times |
-| `verdict` | `label`, `headline`, `reasons[]`, `score`, `score_explanation` |
-| `per_violation` | `{TYPE: {source, unit, numerator, denominator, percentage, duration_s, count, measurable, longest_event_s, severity, max_points, saturation_pct, critical, score, score_explanation}}` |
-| `group_percentages` | `{head_pose, multiple_faces, object, spoof, voice}` |
-| `timeline` | `[{type, source, start_s, end_s, duration_s, details, evidence?}]` |
-| `video` | duration, `n_samples`, `sample_rate_hz`, `baseline`, `calibration`, `gaze_method`, `antispoof` |
+| `verdict` | `label`, `headline`, `reasons[]`, `score`, `score_explanation`, `assessment_status`, `review_priority` |
+| `assessment` | `status`, `review_priority`, `retest_recommended`, `risk_score`, `verdict`, `evidence_strength`, `review_required[]`, `independent_families_confirmed[]`, `corroborations`, `contributing_families[]`, `event_counts{confirmed, uncertain, filtered, unavailable}`, `missing_checks[]`, `coverage{status, problems[], ...}`, notes |
+| `per_violation` | `{TYPE: {source, unit, numerator, denominator, percentage, duration_s, count, measurable, longest_event_s, severity, max_points, saturation_pct, critical, score, score_explanation}}`, plus the buffer fields: `raw_detection_count`, `filtered_detection_count`, `merged_event_count`, `confirmed_event_count`, `unconfirmed_event_count`, `confirmed_percentage`, `scored_percentage`, `valid_observation_duration_s`, `unavailable_duration_s`, `evidence_strength`, `review_required`, `buffer_policy`, `validation_metrics`, … |
+| `group_percentages` | `{head_pose, multiple_faces, object, spoof, voice}` (confirmed time) |
+| `events` | Every event record, chronological (schema in Section 7.3b): `event_id`, `type`, `modality`, times, `validation_status`, `validation_reason`, `severity`, `family`, `confidence`, `observation_quality`, counts, `persistence_s`, `score_contribution`, `evidence_refs[]`, `related_event_ids[]`, `metadata` |
+| `fusion` | `{schema_version, families{label, members, rule, confirmed_events, uncertain_events, filtered_events, deduplicated_s, points, contributed}, relations[{a, b, kind, overlap_s}]}` |
+| `limitations[]` | Uncalibrated scores, checks not performed, model fallbacks |
+| `timeline` | The confirmed + uncertain events (same records as in `events`), kept for older readers; also `status` (confirmed / unconfirmed) and `evidence` |
+| `video` | duration, `n_samples`, `sample_rate_hz`, `baseline`, `calibration`, `gaze_method`, `antispoof`, `head_pose` (adaptive-threshold audit: calibration, thresholds, drift, deviations, observation quality) |
 | `audio` | `status`, `duration_s`, `speech_s`, `vad_engine`, `voiceprint`, `segments`, `vad_rejected` |
 | `warnings[]` | report warnings |
 | `thresholds` | full config used |
-| `evidence` | `{group: {label, items[]}}` |
+| `evidence` | `{group: {label, items[]}}`; each item also has `event_ids`, `score_contribution`, `validation_reason`, `related_event_ids` |
 | `evidence_counters` | `{group: {count, percentage, basis, limit, limit_text, exceeded}}` |
 | `session_violation` | `{violated, groups_exceeded[]}` |
 | `evidence_upload` | `{group: {status, target, ...}}` |
@@ -1234,9 +1293,19 @@ npm run dev
    - The backend checks speech length, level, noise, clipping and voice consistency, and explains how to fix a bad recording. You get up to 3 attempts.
    - A returning candidate can reuse their saved enrollment.
 2. **Test.** Choose one:
-   - **Live:** look at the screen for the first ~3 s (calibration). Badges, alerts and evidence counters update with every analysed sample. Click **Stop session** to build the report.
+   - **Live:** look at the screen for the first ~3 s (calibration). Badges and evidence counters update with every analysed sample. Alerts appear as *Provisional* and turn *Confirmed* or *Not confirmed*, each with a short reason. Click **Stop session** to build the report.
    - **Recorded video:** upload an exam recording. It is analysed as a background job with a progress bar.
-3. **Results**: verdict and score with explanations, per-violation scoring, a percentage chart, one timeline for video and audio, evidence snapshots and audio clips, and the per-violation table. Download as PDF, Word or JSON.
+3. **Results**:
+   - verdict, risk score and review status / priority;
+   - **Evidence fusion**: event counts, evidence families, and a filterable event list with reasons, points, evidence links and related events;
+   - per-violation scoring and violation analysis;
+   - a percentage chart and one timeline for video and audio;
+   - evidence snapshots and audio clips;
+   - the per-violation table.
+
+   Download as PDF, Word or JSON.
+
+The theme toggle (top right) switches between light and dark. The layout works from phone width (360 px) up.
 
 ### Command line (offline analysis, from `server/`)
 
@@ -1302,10 +1371,21 @@ The backend console prints `>>> Models loaded` when warm-up finishes. The first 
 | Calibration / evaluation (not pass/fail) | `calibrate_face_threshold`, `calibrate_speaker_threshold`, `calibrate_speaker_live`, `eval_video`, `eval_voice2` |
 
 **Recorded results**:
-- `tests/results/SUMMARY.md` (dated 2026-10-14 18:23) lists 13 passing scripts.
-- That run predates later changes (L2CS gaze, anti-spoofing, voice rules, 10 fps, scoring) and lists a `test_u1_ui` module that no longer exists.
-- Per `plan.md`, the scripts added or changed afterwards were **written but not executed**: `test_gz3_l2cs`, `test_det2_persons_objects`, `test_fas1_antispoof`, `test_perf1_threads`, and the updated `test_g1_aggregation`.
-- **The current pass/fail state is therefore not verified.**
+- `tests/results/SUMMARY.md` (dated 2026-10-14 18:23) lists 13 passing scripts. That run predates later changes and lists a `test_u1_ui` module that no longer exists. It was not regenerated.
+- **Re-run on 2026-10-15**, after the tolerance buffer, adaptive head pose and evidence fusion were added. Scripts were run individually; `run_all` was not used.
+
+  | Script | Result |
+  |---|---|
+  | `test_g1_aggregation` | **PASS**. Expectations updated for the buffer; new buffer checks added. |
+  | `test_r1_legacy_equivalence` | **PASS** |
+  | `test_server_regression` | **PASS** |
+  | `test_v1_head_pose` | **PASS** |
+  | `test_v2_v4_sampling_calibration_pose` | **PASS**. The V2 check now derives the expected spacing from `sampling.fps` (10 fps) instead of a hard-coded 1/3 s. V4 v2 on its synthetic sequence: 10 TP, 0 FP, 0 FN. |
+  | `test_hp2_pose_gaze` | **PASS** |
+  | `test_e2e` | **FAIL**, 2 checks, both from earlier changes: <ul><li>"evidence grouped" expects 4 groups, but FAS1 added `spoof`;</li><li>"MULTIPLE_SPEAKERS present": the audio monitor no longer produces that event on the synthetic clip.</li></ul> A local `import config as C` that crashed the script was removed. |
+  | `test_a4_a6_audio_monitor` | **FAIL**: MULTIPLE_SPEAKERS window recall 0.333 (< 0.8) in the audio monitor itself, which these changes did not touch. |
+
+- **Not re-run:** `test_v5_gaze`, `test_v6_face`, `test_v7_v8_scene`, `test_gz3_l2cs`, `test_det2_persons_objects`, `test_fas1_antispoof`, `test_a1_a2_audio_vad`, `test_a3_enrollment`, `test_vad2_mp2_ob2`, `test_perf1_threads`.
 - Some tests use personal sample files with hard-coded paths (`tests/paths.py`: `SAMPLE_VIDEO`, `SAMPLE_REF`) and will skip or fail on another machine.
 
 **Verification commands**
@@ -1328,7 +1408,8 @@ npm run build
 
 **Manual checks** (no automation exists):
 - camera and microphone permissions;
-- a live session end to end (calibration, alerts, stop, results);
+- a live session end to end: calibration, the alert lifecycle (provisional → confirmed / not confirmed), stop, results;
+- the results page in both themes and at phone, tablet and desktop widths (the enrollment and results screens were checked with headless-browser screenshots; the running live view was not);
 - recorded-video job;
 - PDF / Word downloads;
 - behaviour in a dark room;
@@ -1386,10 +1467,26 @@ npm run build
 - **Earphones** are not detectable with COCO classes.
 - **Live sampling** is CPU-bound (~3 samples/s on the dev machine), so very short events can be missed.
 - **Browser audio processing** (noise suppression, auto-gain) is not modelled in the speaker calibration.
+- **Buffer, adaptive head-pose and fusion values are starting policies.** These include confirmation durations, grace budgets, head-pose base / k / min / max, quality weights and evidence families. The adaptive head-pose logic was only exercised on one 12.7 s clip, and no false-alert rate before / after these changes has been measured.
+- **Detector scores are not calibrated.** Only YOLO and YAMNet expose a per-event score; it is reported as uncalibrated and is not used for scoring.
 
 **Interpretation**: the score and verdict are **indicators for human review**, not proof of cheating. The reports list reasons, evidence and explanations for that purpose; no automated adjudication exists.
 
-**Accessibility**: the UI uses semantic labels, ARIA roles for progress and status, focus rings, reduced-motion support and contrast-checked colours (`src/index.css`). Accessibility of the proctoring checks themselves is not addressed, for example candidates who cannot look at the screen steadily.
+**Accessibility**:
+- **Supported:**
+  - semantic labels;
+  - ARIA roles for progress, status and tabs;
+  - one consistent keyboard focus outline;
+  - reduced-motion and reduced-transparency support;
+  - larger touch targets on touch screens;
+  - contrast-checked tokens (`src/index.css` header).
+- **Known contrast gaps:**
+  - white text on the light accent (#6478D3) is about 4.1:1;
+  - white on critical red (#C45B5B) is about 4.2:1;
+  - the muted caption colour is about 3.4–3.7:1.
+
+  These pass the 3:1 rule for UI controls, but not 4.5:1 for small text.
+- **Not addressed:** the accessibility of the proctoring checks themselves, for example candidates who cannot look at the screen steadily.
 
 ---
 
@@ -1399,18 +1496,30 @@ npm run build
 1. **Enrollment**: face embedding + voiceprint, with consent.
 2. **Capture**: a live WebRTC stream or an uploaded video.
 3. **Server-side analysis**: identity, liveness, pose, gaze, persons, objects, speech, voices, whispering and sounds, with calibration, smoothing and persistence.
-4. **Reporting**: time-stamped events, severity-based 0–100 scoring with critical overrides, an evidence package with session-violation limits, and JSON / PDF / Word reports shown on the results page.
+4. **Validation and fusion**:
+   - a per-type tolerance buffer;
+   - evidence families with de-duplication of correlated signals;
+   - explainable event records (confirmed, uncertain, filtered, unavailable) with stable IDs;
+   - live alerts with the same lifecycle.
+5. **Reporting**:
+   - severity-based 0–100 scoring from confirmed events, with quality-gated critical overrides;
+   - a separate assessment status and review priority;
+   - an evidence package linked to the events, with session-violation limits;
+   - JSON / PDF / Word reports shown on the results page.
 
 **Partially implemented / caveats**
 - Passage ASR check: present but disabled.
 - `/api/reports` listing: exists, but no UI uses it.
 - The evidence "upload" defaults to a local folder (`evidence_upload.url = None`); a remote URL is supported but not configured.
-- Automated tests were not re-run after the latest model, scoring and sampling changes.
+- Automated tests were only partly re-run (Section 16). `test_e2e` and `test_a4_a6_audio_monitor` still fail for reasons that predate the buffer / fusion work.
 - `config.py`: the comment on `gaze.l2cs.cal_min_samples` holds a timing note that belongs to `torch_threads` (comment only, no effect).
 
 **Recommended future work** (not existing functionality)
-1. Re-run and update the automated test suite. Remove hard-coded personal sample paths, or provide a public sample.
-2. Collect labelled real sessions to calibrate the thresholds: gaze ±15°, anti-spoof 0.5, speaker 0.70 / 0.72, person and object limits. Measure attack recall for spoofing.
+1. Re-run the full test suite and regenerate `SUMMARY.md`:
+   - fix the stale 4-group assertion in `test_e2e`;
+   - investigate the low MULTIPLE_SPEAKERS recall;
+   - remove hard-coded personal sample paths, or provide a public sample.
+2. Collect labelled real sessions to calibrate the thresholds: gaze ±15°, anti-spoof 0.5, speaker 0.70 / 0.72, person and object limits, and the buffer / adaptive head-pose / fusion settings. Measure the false-alert rate before and after each change, and attack recall for spoofing.
 3. Add authentication, per-report access control, encryption at rest and a retention / deletion policy (including recorded-video uploads).
 4. Add STUN / TURN configuration if candidates and server are on different machines.
 5. Improve live throughput (e.g. alternate-frame identity checks, a GPU, or lighter models) so live sessions reach the configured 10 samples/s.
