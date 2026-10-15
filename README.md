@@ -432,12 +432,24 @@ No model in this repository is trained or fine-tuned by the project. All learned
     1. During calibration, 33 rigid landmarks from accepted frames are normalised and averaged into a person-specific 3D template — `build_template`.
     2. Each frame's landmarks are aligned to the template with SVD (Kabsch) — `relative_rotation`.
     3. The resulting rotation is converted to Euler angles relative to the calibrated pose.
-- **Thresholds**: |yaw| > 15°, |pitch| > 10°, |roll| > 10°.
-  - Median smoothing over `smooth_s = 1 s`.
-  - Hysteresis: 3°.
-  - Slow baseline adaptation: τ = 120 s, capped at 8°, using only clearly normal samples.
-  - Persistence: 1 s — `pipeline.py:_flag_pose`, `config.head_pose`.
-- **Output**: raw / final `HEAD_POSE_DEVIATION`; `rel_yaw`, `rel_pitch`, `rel_roll` per sample.
+- **Thresholds (HP3, candidate-specific, `config.head_pose.adaptive`)**: the same `VideoAnalyzer` code runs live (WebRTC) and offline (uploaded video).
+  1. **Calibration**: samples come from the existing calibration window (`config.calibration`). A sample is rejected when it has no face or landmarks, the identity is not verified, the head is not frontal, the face box is under `min_face_px`, the frame is dark (`lighting.low_mean`), or the head moves faster than `cal_max_motion_deg_s`. Each rejection reason is counted.
+  2. **Robust variability**: the baseline is the median. Variability per axis is 1.4826 × MAD of the calibration angles relative to the candidate's template.
+  3. **Threshold** per axis = `clamp(base_deg + k × variability, min_deg, max_deg)`.
+     - Initial values: base 12 / 8 / 8°, k = 2, min 10 / 7 / 7°, max 25 / 18 / 18°. These are initial values for evaluation, not validated thresholds.
+  4. **Fallback**: confidence is `reduced` when there are fewer than `min_valid_samples` accepted samples, variability exceeds `max_cal_variability_deg` on any axis, or the calibration fallback was used. The fixed `yaw_thr` / `pitch_thr` / `roll_thr` (15 / 10 / 10°) then apply, threshold adaptation is off, and the report gets a `HEAD_POSE_CALIBRATION_REDUCED` warning.
+  - **Order per sample**: quality check → relative angles → median smoothing (`smooth_s = 1 s`) → threshold in force → per-axis hysteresis (`hyst_deg` 3 / 2 / 2°) → persistence (`persist_s = 1 s`) → event merging and the BUF1 buffer (Section 7.1).
+  - **Unreliable landmarks**: a template fit residual above `max_fit_residual` leaves the sample **unmeasured**. It is never treated as normal.
+  - **Online adaptation**: the baseline (τ = `adapt_tau_s` 120 s, at most `adapt_max_step_deg` per update, at most `adapt_max_deg` total drift) and the thresholds (τ = `thr_adapt_tau_s` 300 s, at most ± `thr_max_shift_deg` from the calibrated value, always inside min/max) adapt separately. Both freeze under the same conditions:
+    - a low-quality observation;
+    - a suspected deviation;
+    - any axis, current or smoothed, at or above `adapt_below_frac` of its threshold;
+    - movement faster than `abrupt_deg_s`;
+    - a gap longer than `max_gap_s`.
+
+    Adaptation stays frozen for `recovery_s` afterwards. Because of this gate, a sustained head turn cannot become the baseline, and large movements cannot raise the thresholds.
+- **Output**: raw / final `HEAD_POSE_DEVIATION`. Per sample: `rel_yaw`, `rel_pitch`, `rel_roll`, `raw_rel_*`, `pose_thr` (the threshold in force), `pose_fit_residual`, `pose_quality_issues` and `pose_adapt`. Per session: `video.head_pose` holds calibration status, confidence, accepted / rejected samples, baseline, variability, initial and final thresholds, drift, per-axis deviation statistics, measured / unavailable duration, observation quality and adaptation counts.
+- **Gaze correlation**: gaze time that overlaps confirmed head-pose time is scored once (`buffer.policies.GAZE_AWAY.correlated_with`).
 
 ### 6.6 Eye gaze — L2CS-Net (active) and iris geometry (fallback)
 
@@ -573,10 +585,22 @@ Source: `server/aggregation/aggregate.py` (`video_stats`, `audio_stats`, `score_
    - **Audio**: `percentage = 100 × (flagged windows × 0.48 s) / audio duration`.
    
    Each type also records `count` (events), `duration_s` and `longest_event_s`.
+4. **Tolerance buffer (BUF1, `aggregation/buffer.py`, config `buffer`)**: applied after step 3, separately for each violation type.
+   - *Detection buffer*: step 2 already smooths raw detections. The report counts them as `raw_detection_count` and `filtered_detection_count`, so nothing is hidden.
+   - *Violation buffer*: flagged runs closer than `merge_gap_s` are merged. A merged event is **confirmed** only when it lasts at least `confirm_s` and has at least `min_support` flagged samples or windows. Otherwise it is **unconfirmed**: it stays in the timeline with `status` and `buffer_reason`, adds no points, and does not count toward the evidence counters.
+   - *Session buffer*: the first `grace_s` seconds of confirmed time earn no points (0 s for critical types). Time already confirmed for a `correlated_with` type is scored only once, for example gaze during a head turn, or speech that is already a voice violation.
+
+   Per type, the report adds `merged_event_count`, `confirmed_event_count`, `unconfirmed_event_count`, `confirmed_duration_s` / `confirmed_percentage`, `scored_duration_s` / `scored_percentage`, `valid_observation_duration_s`, `unavailable_duration_s`, `evidence_strength` (none / weak / moderate / strong), `review_required`, `buffer_policy`, `validation_metrics` and `calibrated_confidence`.
+   - `calibrated_confidence` is always `null`: detector scores are not calibrated, so a score of 0.9 does not mean 90% accuracy.
+   - `validation_metrics` lists only metrics measured in this repository (speaker verification). Every other type says "not measured on a labelled set".
+
+   The buffer values are **starting policies to evaluate, not validated thresholds**. Tune them on labelled recordings against an explicit false-alert target, then test the frozen values on independent recordings.
 
 ### 7.2 Per-violation points (actual formula)
 
 For each type *i* (`score_violation`):
+
+With the buffer on (v2 profile), `percentage_i` below is `scored_percentage_i`: confirmed time, minus correlated time, minus the grace budget. The critical overrides, the "non-critical type ≥ saturation %" review rule and the evidence-group percentages use `confirmed_percentage_i` and the longest *confirmed* event.
 
 ```text
 fraction_i = min(1, percentage_i / saturation_pct_i)
@@ -625,6 +649,13 @@ flowchart TD
     EV -- "no" --> DONE["final verdict"]
 ```
 
+With the buffer on, the review step changes in three ways:
+- "any critical type has an event" becomes "a type has `review_required`". That means a critical type has confirmed events with less than strong evidence, or the type has unconfirmed events and its `review_unconfirmed` policy is on.
+- **Assessment coverage** is checked. The verdict carries `assessment_status` = `COMPLETE` or `INCONCLUSIVE`. It is `INCONCLUSIVE` when there is no video, less than `buffer.min_monitored_s` of video, or less than `buffer.min_video_usable_frac` of non-dark samples.
+- An inconclusive session is never VALID. It is reported as SUSPICIOUS with the reason "retest recommended". The three verdict labels stay unchanged for frontend compatibility.
+
+The `assessment` block in the report summarises the three dimensions: risk score, strongest evidence and coverage.
+
 Critical overrides (`aggregation.critical`; identity uses a strict `>`):
 
 | Type | % threshold | Single event ≥ | Reason text |
@@ -636,9 +667,41 @@ Critical overrides (`aggregation.critical`; identity uses a strict `>`):
 | VOICE_MISMATCH | ≥ 10 | 5 s | Voice does not match the enrolled candidate |
 | MULTIPLE_SPEAKERS | ≥ 10 | 5 s | Another person speaking |
 
+### 7.3b Evidence fusion (FUS1, `server/aggregation/fusion.py`, config `fusion`)
+
+All detector output reaches the verdict through one path. The detectors produce raw flags with their measurements. The detectors' persistence rules and the BUF1 buffer merge and confirm them. The fusion engine then gives every event one schema and explains it.
+
+- **Event record** (in `report.events`, sorted by time).
+  - **Existing keys:** `type` (event type), `source` (also copied to `modality`), `start_s`, `end_s`, `duration_s`.
+  - **Identity, status and points:** `event_id` (stable within the report), `validation_status` (`confirmed`, `uncertain`, `filtered` or `unavailable`), `validation_reason`, `severity`, `family`, `score_contribution`, `score_basis`.
+  - **Measurements:** `confidence` and `confidence_kind` (only YOLO and YAMNet expose a score, and it is uncalibrated), `observation_quality` (`good`, `low` or null), `raw_detection_count`, `validated_detection_count`, `persistence_s`.
+  - **Links:** `evidence_refs`, `related_event_ids`, `metadata`.
+  - `report.timeline` keeps the confirmed and uncertain events as the same objects, for older readers.
+- **Filtered records:** raw detection runs that never persisted (audit trail, never scored).
+- **Unavailable records:**
+  - no verifiable face (identity, liveness, pose and gaze cannot be assessed);
+  - no audio;
+  - no voiceprint;
+  - liveness model unavailable.
+- **Evidence families** (`fusion.families`): identity/presentation attack, other person on video, objects, face presence, head and gaze orientation, voices and speech, environment sounds. In a `priority_dedup` family, time already confirmed for an earlier member is not scored again for a later one. For example, gaze during a head turn, multiple speakers during a voice mismatch, or speech that is already a voice violation. This replaces the BUF1 `correlated_with` lists.
+- **Relations** (`report.fusion.relations`): overlapping events are linked as `correlated_same_family`, `corroborating` (independent audio/video pairs in `fusion.corroboration_pairs`) or `co_occurring`. The individual events are always kept.
+- **Scoring:** the per-type model (§7.2) is unchanged. Each type's points are split over its confirmed events in proportion to their validated time, then multiplied by `fusion.quality_weights` (default: low quality × 0.8). Two kinds of evidence never trigger the critical floor or a critical override (§7.3); the violation is sent to review instead:
+  - low observation quality;
+  - weak evidence strength.
+- **Assessment** (`report.assessment`, kept separate from the verdict):
+  - **Status:** `COMPLETE`, `REVIEW_REQUIRED` (verdict not VALID, or any violation needs review) or `INCONCLUSIVE` (coverage too low, or a check in `fusion.required_checks` unmeasurable).
+  - **Review priority:** `high` (INVALID, at least two independent families confirmed, or a cross-modal corroboration), `medium` or `low`.
+  - **Also included:** event counts, contributing families, missing checks and limitations.
+- **Live** (`webrtc_session.py`): each alert has a stable `event_id` and moves through stages:
+  - `provisional`: the 1 s debounce fired;
+  - `confirmed`: the type's `buffer.policies[type].confirm_s` was reached;
+  - `ended`: the signal stopped, as `confirmed` or `not_confirmed`.
+
+  Live counts include confirmed events only. The final report re-validates everything offline.
+
 ### 7.4 Session-violation limits (evidence counters)
 
-`evidence.limits`: a group is **exceeded** when its value is greater than its limit (`evidence.py:counter`). Exceeded groups are "uploaded" (Section 11) and mark the session as violated. A violated session is never VALID.
+`evidence.limits`: a group is **exceeded** when its value is greater than its limit (`evidence.py:counter`). Evidence items and group percentages are built from **confirmed** events only (BUF1), so a single unconfirmed phone blip cannot mark the session as violated. Exceeded groups are "uploaded" (Section 11) and mark the session as violated. A violated session is never VALID.
 
 | Group | Basis | Limit | Measured as |
 |---|---|---|---|

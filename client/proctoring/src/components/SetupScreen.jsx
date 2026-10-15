@@ -232,13 +232,10 @@ const VoiceRecorder = ({ candidate, onResult, disabled }) => {
   return (
     <div className="space-y-4">
       <div>
-        <h3 className="card-title flex items-center gap-2.5">
-          <span className="icon-chip w-8 h-8"><Mic className="w-4 h-4" /></span> Voice enrollment
-        </h3>
-        <p className="text-sm text-muted mt-1.5">Press Record and read this passage aloud at a normal pace.</p>
+        <h3 className="card-title">Voice enrollment</h3>
+        <p className="text-[13px] text-muted mt-1">Press Record and read this passage aloud at a normal pace.</p>
       </div>
-      <blockquote className="relative rounded-2xl p-4 pl-5 text-[0.95rem] leading-relaxed surface-muted overflow-hidden">
-        <span className="absolute left-0 top-3 bottom-3 w-1 rounded-full bg-gradient-to-b from-primary-500 to-accent-500" aria-hidden="true" />
+      <blockquote className="rounded-md border border-line border-l-2 border-l-accent px-4 py-3 text-sm leading-relaxed surface-muted">
         {passage ? passage.text : (
           <>
             <span className="sr-only">Loading the passage…</span>
@@ -265,7 +262,7 @@ const VoiceRecorder = ({ candidate, onResult, disabled }) => {
       {recording && (
         <div>
           <div className="flex justify-between text-xs text-muted mb-1">
-            <span className="inline-flex items-center gap-1.5"><span className="dot bg-[var(--danger)] animate-pulse" /> Recording · input level</span>
+            <span className="inline-flex items-center gap-1.5"><span className="dot bg-critical animate-pulse" /> Recording · input level</span>
             <span className="font-mono">{level.toFixed(0)} dBFS</span>
           </div>
           <div className="track" role="meter" aria-valuemin={-60} aria-valuemax={0} aria-valuenow={Math.round(level)} aria-label="Microphone level">
@@ -291,7 +288,7 @@ const VoiceRecorder = ({ candidate, onResult, disabled }) => {
             <div key={w} className="alert alert-warn"><AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" /> <span>{w}</span></div>
           ))}
           {m.voiced_s !== undefined && (
-            <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 text-center text-xs">
+            <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 text-xs">
               {[
                 ['Speech', `${m.voiced_s.toFixed(1)} s`],
                 ['Level', `${m.level_dbfs.toFixed(0)} dBFS`],
@@ -299,7 +296,7 @@ const VoiceRecorder = ({ candidate, onResult, disabled }) => {
                 ['Clipping', `${(100 * m.clip_frac).toFixed(2)} %`],
                 ['Consistency', (m.consistency ?? 0).toFixed(2)],
               ].map(([k, v]) => (
-                <div key={k} className="surface-muted rounded-xl p-2.5">
+                <div key={k} className="rounded-md border border-line px-2.5 py-2">
                   <div className="text-subtle">{k}</div>
                   <div className="font-mono font-semibold tabular-nums mt-0.5">{v}</div>
                 </div>
@@ -384,25 +381,25 @@ const SetupScreen = ({ onEnrolled }) => {
   };
 
   const ready = consent && !!candidateId;
+  // numbered step marker: neutral until the step is complete
   const StepDot = ({ n, done }) => (
-    <span className={`inline-flex items-center justify-center w-8 h-8 rounded-xl text-sm font-semibold transition-colors ${
-      done ? 'bg-[#2FB37B] text-white' : 'bg-gradient-to-br from-primary-600 to-accent-600 text-white shadow-glow'
+    <span className={`inline-flex items-center justify-center w-5 h-5 rounded-full text-2xs font-semibold flex-shrink-0 ${
+      done ? 'bg-success text-white' : 'border border-line text-fg-muted'
     }`}>
-      {done ? <Check className="w-4 h-4" aria-label="done" /> : n}
+      {done ? <Check className="w-3 h-3" aria-label="done" /> : n}
     </span>
   );
 
   return (
-    <div className="max-w-5xl mx-auto space-y-6">
-      <div>
-        <p className="eyebrow">Step 1 · Before the exam</p>
-        <h1 className="page-title mt-1">Enrollment</h1>
-        <p className="text-muted mt-1.5">Register your face and voice so the system can recognise you during the test.</p>
+    <div className="max-w-5xl mx-auto space-y-4">
+      <div className="mb-2">
+        <h1 className="page-title">Enrollment</h1>
+        <p className="text-muted mt-1">Register your face and voice so the system can recognise you during the test.</p>
       </div>
 
       {/* 1. candidate + consent */}
       <section className="card space-y-4">
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2.5">
           <StepDot n={1} done={ready} />
           <h2 className="card-title">Candidate and consent</h2>
         </div>
@@ -418,12 +415,12 @@ const SetupScreen = ({ onEnrolled }) => {
               autoComplete="off"
               spellCheck={false}
               aria-describedby="candidate-id-hint"
-              className="input"
+              className="input max-w-sm"
             />
             <p id="candidate-id-hint" className="field-hint">Your roll or registration number, exactly as on your admit card.</p>
           </div>
           {savedInfo?.face && (
-            <button onClick={() => onEnrolled(candidateId)} className="btn btn-secondary">
+            <button onClick={() => onEnrolled(candidateId)} className="btn btn-secondary whitespace-normal h-auto min-h-8 py-1.5 text-left">
               <History className="w-4 h-4" /> Use saved enrollment (voice: {savedInfo.voice ? 'yes' : 'no'})
             </button>
           )}
@@ -440,14 +437,12 @@ const SetupScreen = ({ onEnrolled }) => {
         </div>
       </section>
 
-      <div className={`grid grid-cols-1 lg:grid-cols-2 gap-6 transition-opacity ${ready ? '' : 'opacity-50 pointer-events-none select-none'}`} aria-disabled={!ready}>
+      <div className={`grid grid-cols-1 xl:grid-cols-2 gap-4 transition-opacity ${ready ? '' : 'opacity-50 pointer-events-none select-none'}`} aria-disabled={!ready}>
         {/* 2. reference photo */}
         <section className="card space-y-4">
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2.5">
             <StepDot n={2} done={faceOk} />
-            <h2 className="card-title flex items-center gap-2.5">
-              <span className="icon-chip w-8 h-8"><Camera className="w-4 h-4" /></span> Reference photo
-            </h2>
+            <h2 className="card-title">Reference photo</h2>
           </div>
           <div className="segmented flex w-full" role="tablist" aria-label="Photo source">
             <button
@@ -473,9 +468,9 @@ const SetupScreen = ({ onEnrolled }) => {
               captureMode === 'webcam' ? (
                 <Webcam ref={webcamRef} screenshotFormat="image/jpeg" className="w-full h-full object-cover" mirrored />
               ) : (
-                <div className="w-full h-full flex flex-col items-center justify-center gap-3 text-white/80 px-6 text-center">
-                  <span className="inline-flex items-center justify-center w-12 h-12 rounded-2xl bg-white/10"><ImageIcon className="w-6 h-6" /></span>
-                  <p className="text-sm">A clear, front-facing photo (JPG or PNG)</p>
+                <div className="w-full h-full flex flex-col items-center justify-center gap-3 text-white/70 px-6 text-center">
+                  <ImageIcon className="w-6 h-6 text-white/60" aria-hidden="true" />
+                  <p className="text-xs">A clear, front-facing photo (JPG or PNG)</p>
                   <button onClick={() => fileInputRef.current.click()} className="btn btn-primary">
                     <Upload className="w-4 h-4" /> Choose image
                   </button>
@@ -486,11 +481,11 @@ const SetupScreen = ({ onEnrolled }) => {
               <img src={capturedImage} alt="Captured reference" className="w-full h-full object-cover" />
             )}
             {faceOk && (
-              <span className="absolute top-3 left-3 badge bg-[#2FB37B] text-white shadow-glass"><CheckCircle className="w-3.5 h-3.5" /> Enrolled</span>
+              <span className="absolute top-3 left-3 media-chip"><CheckCircle className="w-3.5 h-3.5 text-success" /> Enrolled</span>
             )}
           </div>
 
-          <ul className="text-sm text-muted space-y-1">
+          <ul className="text-[13px] text-muted space-y-1">
             <li className="flex gap-2"><Sun className="w-4 h-4 mt-0.5 flex-shrink-0" /> Face clearly visible and well lit, looking straight at the camera</li>
             <li className="flex gap-2"><UserIcon className="w-4 h-4 mt-0.5 flex-shrink-0" /> Only you in the picture</li>
           </ul>
@@ -499,7 +494,7 @@ const SetupScreen = ({ onEnrolled }) => {
             <div className="alert alert-error"><AlertCircle className="w-5 h-5 flex-shrink-0" /> <span>{error}</span></div>
           )}
 
-          <div className="flex gap-3">
+          <div className="flex flex-wrap gap-2">
             {!capturedImage ? (
               <button onClick={handleCapture} disabled={captureMode !== 'webcam'} className="btn btn-primary flex-1">
                 <Camera className="w-4 h-4" /> Capture photo
@@ -534,7 +529,7 @@ const SetupScreen = ({ onEnrolled }) => {
         </section>
       </div>
 
-      <div className="flex flex-col sm:flex-row gap-3 justify-end">
+      <div className="flex flex-col-reverse sm:flex-row gap-2 justify-end pt-2 [&>.btn]:w-full sm:[&>.btn]:w-auto">
         {faceOk && !voiceOk && attemptsUsed && (
           <button onClick={() => onEnrolled(candidateId)} className="btn btn-secondary">
             Continue without voice (voice checks disabled)

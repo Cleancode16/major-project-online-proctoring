@@ -331,24 +331,112 @@ def _evidence(report, evidence_dir):
     return out
 
 
-def _events(report):
-    tl = report.get("timeline", [])
-    if not tl:
+def _fusion(report):
+    """FUS1: assessment, evidence families and limitations."""
+    lines = assessment_lines(report)
+    if not lines:
         return []
-    rows = [["Start", "End", "Duration", "Source", "Violation", "Details"]]
-    for e in tl:
-        rows.append([fmt_t(e["start_s"]), fmt_t(e["end_s"]), f"{e['duration_s']:.1f} s", e["source"], nice(e["type"]),
-                     P(safe(json.dumps(e.get("details") or {})[:160]), "small")])
-    return [CondPageBreak(50 * mm), P("All events", "h2"),
-            table(rows, [18 * mm, 18 * mm, 18 * mm, 14 * mm, 38 * mm, CONTENT_W - 106 * mm])]
+    out = [CondPageBreak(40 * mm), P("Assessment and evidence fusion", "h2")]
+    out += [P(f"- {safe(x)}", "small") for x in lines]
+    rows = family_rows(report)
+    if rows:
+        out += [Spacer(1, 4), table([[P(safe(c), "cell") for c in r] for r in rows],
+                                    [40 * mm, CONTENT_W - 120 * mm, 18 * mm, 18 * mm, 22 * mm, 22 * mm])]
+    return out + [Spacer(1, 8)]
+
+
+def _events(report):
+    rows, n_filtered = event_rows(report)
+    if len(rows) == 1:
+        return []
+    cells = [rows[0]] + [[r[0], r[1], P(safe(r[2]).replace("\n", "<br/>"), "small"), r[3], r[4], r[5],
+                          P(safe(r[6]), "small")] for r in rows[1:]]
+    out = [CondPageBreak(50 * mm), P("All events", "h2"),
+           table(cells, [16 * mm, 16 * mm, 38 * mm, 20 * mm, 16 * mm, 13 * mm, CONTENT_W - 119 * mm])]
+    if n_filtered:
+        out.append(P(f"{n_filtered} filtered raw detection run(s) are listed in the JSON report (not scored).", "small"))
+    return out
+
+
+# ------------------------------------------------------------------------------------- FUS1 shared rows (PDF + Word)
+def assessment_lines(report):
+    a = report.get("assessment") or {}
+    if not a:
+        return []
+    c = a.get("event_counts") or {}
+    lines = [f"Assessment: {a.get('status', '-')} - review priority {a.get('review_priority', '-')}; "
+             f"verdict {a.get('verdict', report['verdict']['label'])}, risk score {a.get('risk_score', '-')} / 100.",
+             "Events: " + ", ".join(f"{v} {k}" for k, v in c.items()) + "." if c else "",
+             "Evidence families that contributed points: " + (", ".join(
+                 (report.get("fusion") or {}).get("families", {}).get(f, {}).get("label", f)
+                 for f in a.get("contributing_families", [])) or "none") + "."]
+    if a.get("corroborations"):
+        lines.append(f"{a['corroborations']} corroboration(s) between independent audio and video signals.")
+    if (a.get("coverage") or {}).get("problems"):
+        lines.append("Coverage: " + "; ".join(a["coverage"]["problems"]) + ".")
+    lines += report.get("limitations") or []
+    lines.append(a.get("note", ""))
+    return [x for x in lines if x]
+
+
+def family_rows(report):
+    fams = (report.get("fusion") or {}).get("families") or {}
+    rows = [["Evidence family", "Members", "Confirmed", "Uncertain", "De-dup. s", "Points"]]
+    for f in fams.values():
+        if not f["measurable"] and not f["confirmed_events"]:
+            continue
+        rows.append([f["label"], ", ".join(nice(m) for m in f["members"]) +
+                     (" (priority de-dup.)" if f["rule"] == "priority_dedup" else ""),
+                     str(f["confirmed_events"]), str(f["uncertain_events"]), f"{f['deduplicated_s']:.1f}",
+                     f"{f['points']:.1f}"])
+    return rows if len(rows) > 1 else []
+
+
+def event_rows(report, max_rows=200):
+    """Chronological event table: confirmed, uncertain and unavailable records (filtered ones are counted)."""
+    evs = report.get("events")
+    if evs is None:                                   # reports before FUS1
+        evs = report.get("timeline", [])
+    shown = [e for e in evs if e.get("validation_status", "confirmed") != "filtered"][:max_rows]
+    rows = [["Start", "End", "Event", "Status", "Severity", "Points", "Why / evidence"]]
+    for e in shown:
+        why = e.get("validation_reason") or json.dumps(e.get("details") or {})[:120]
+        refs = [r["file"].rsplit("/", 1)[-1] for r in e.get("evidence_refs") or []]
+        if refs:
+            why += " | evidence: " + ", ".join(refs)
+        if e.get("related_event_ids"):
+            why += " | related: " + ", ".join(e["related_event_ids"])
+        rows.append([fmt_t(e["start_s"]), fmt_t(e["end_s"]),
+                     f"{e.get('event_id', '')}\n{nice(e['type'])} ({e.get('duration_s', 0):.1f} s)",
+                     e.get("validation_status", "confirmed"), e.get("severity") or "-",
+                     f"{e.get('score_contribution', 0.0):.1f}", why[:300]])
+    n_filtered = sum(1 for e in evs if e.get("validation_status") == "filtered")
+    return rows, n_filtered
+
+
+def _head_pose_line(report, hp):
+    """HP3: adaptive (per-session) head-pose thresholds when present, else the fixed ones."""
+    c = (((report.get("video") or {}).get("head_pose") or {}).get("calibration")) or {}
+    tail = f", for {hp.get('persist_s')} s (method {hp.get('method', 'pnp')})"
+    if not c.get("adaptive"):
+        return f"Head pose: yaw {hp.get('yaw_thr')} / pitch {hp.get('pitch_thr')} / roll {hp.get('roll_thr')} deg" + tail
+    ini = c["initial_thresholds_deg"]
+    fin = report["video"]["head_pose"]["final_thresholds_deg"]
+    b = c["baseline_deg"]
+    text = (f"Head pose (adaptive, calibration {c['status']}, confidence {c['confidence']}, "
+            f"{c['accepted_samples']} of {c['seen_samples']} calibration samples accepted): thresholds yaw/pitch/roll "
+            f"{ini['yaw']}/{ini['pitch']}/{ini['roll']} deg at calibration, {fin['yaw']}/{fin['pitch']}/{fin['roll']} "
+            f"deg at the end; baseline {b['yaw']}/{b['pitch']}/{b['roll']} deg")
+    if c.get("fallback_thresholds_used"):
+        text += "; fixed fallback thresholds used: " + "; ".join(c.get("problems", []))
+    return text + tail
 
 
 def _thresholds(report):
     th = report.get("thresholds") or {}
     hp, gz, ob, ev = th.get("head_pose", {}), th.get("gaze", {}), th.get("objects", {}), th.get("evidence", {})
     lines = [
-        f"Head pose: yaw {hp.get('yaw_thr')} / pitch {hp.get('pitch_thr')} / roll {hp.get('roll_thr')} deg, "
-        f"for {hp.get('persist_s')} s (method {hp.get('method', 'pnp')})",
+        _head_pose_line(report, hp),
         f"Gaze: {gz.get('h_thr_deg')} deg horizontal / {gz.get('v_thr_deg')} deg vertical, for {gz.get('persist_s')} s",
         f"Face match threshold (cosine): {th.get('face', {}).get('cos_threshold')}; "
         f"voice match threshold: {th.get('speaker', {}).get('verify_thr')}",
@@ -383,6 +471,7 @@ def build_pdf(report, evidence_dir, out_path):
     story += _header(report)
     story += _verdict(report)
     story += _summary(report)
+    story += _fusion(report)
     story += _scoring(report)
     story += _evidence_counters(report)
     story += _per_violation(report)

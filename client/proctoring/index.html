@@ -4,7 +4,10 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
     <title>Online Proctoring</title>
+    <!-- page background before the CSS bundle loads (keep in sync with --bg in src/index.css) -->
+    <style>html { background: #F7F7F5; } html.dark { background: #171717; color-scheme: dark; }</style>
     <script>
       // Apply the saved (or OS) theme before the first paint so dark mode never flashes white.
       (function () {

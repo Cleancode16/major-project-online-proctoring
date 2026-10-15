@@ -109,7 +109,6 @@ def main():
 
     print("(5) the server's report API serves this report and its evidence (Flask test client)")
     import shutil
-    import config as C
     import server
     dst = C.REPORTS_DIR / "e2e_test_report"
     if dst.exists():

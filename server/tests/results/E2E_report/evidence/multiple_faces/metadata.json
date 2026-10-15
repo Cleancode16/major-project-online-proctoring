@@ -1,0 +1,31 @@
+{
+  "group": "multiple_faces",
+  "items": [
+    {
+      "id": "multiple_faces-001",
+      "type": "MULTIPLE_PERSONS",
+      "source": "video",
+      "start_s": 10.91,
+      "end_s": 12.72,
+      "duration_s": 1.81,
+      "event_ids": [
+        "multiple_persons-001"
+      ],
+      "score_contribution": 35.0,
+      "validation_reason": "confirmed: 1.81 s with 18 validated observation(s) (needs >= 1.0 s and >= 2)",
+      "related_event_ids": [
+        "gaze_away-001",
+        "head_pose_deviation-001",
+        "prohibited_object-001",
+        "suspicious_sound-001"
+      ],
+      "severity": "critical",
+      "observation_quality": "good",
+      "file": "evidence/multiple_faces/01_multiple_persons_10.9s.jpg",
+      "snapshot_t": 11.717,
+      "face_count": 2,
+      "person_count": 2,
+      "max_persons": 2
+    }
+  ]
+}

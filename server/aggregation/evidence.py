@@ -78,7 +78,8 @@ def _video_item(group, event, samples, cfg, folder, idx):
         item["angles_deg"] = {k: round(snap[f"rel_{k}"], 1) for k in ("yaw", "pitch", "roll") if f"rel_{k}" in snap}
         item["max_abs_angles_deg"] = {k: round(max((abs(s[f"rel_{k}"]) for s in run if f"rel_{k}" in s), default=0.0), 1)
                                       for k in ("yaw", "pitch", "roll")}
-        item["allowed_deg"] = {"yaw": hp["yaw_thr"], "pitch": hp["pitch_thr"], "roll": hp["roll_thr"]}
+        lim = snap.get("pose_thr") or (hp["yaw_thr"], hp["pitch_thr"], hp["roll_thr"])   # HP3: threshold in force
+        item["allowed_deg"] = {"yaw": lim[0], "pitch": lim[1], "roll": lim[2]}
         item["allowed_duration_s"] = hp["persist_s"]
     elif group == "spoof":                       # FAS1
         ac = cfg.get("antispoof", {})
@@ -144,9 +145,11 @@ def build_evidence(report, video, audio, cfg, out_dir):
     """Write the evidence files and return {group: {label, items: [...]}} (items sorted by start time)."""
     samples = (video or {}).get("samples", [])
     evidence = {g: {"label": GROUP_LABELS[g], "items": []} for g in GROUPS}
-    voice_events = [e for e in report["timeline"] if GROUP_OF.get(e["type"]) == "voice"]
+    # BUF1: counters must be driven by validated events, so unconfirmed events stay in the timeline only
+    confirmed = [e for e in report["timeline"] if e.get("status", "confirmed") == "confirmed"]
+    voice_events = [e for e in confirmed if GROUP_OF.get(e["type"]) == "voice"]
     merged_voice = merge_voice_events(voice_events, cfg["evidence"].get("voice_merge_gap_s", 0.0))
-    others = [e for e in report["timeline"] if GROUP_OF.get(e["type"]) not in (None, "voice")]
+    others = [e for e in confirmed if GROUP_OF.get(e["type"]) not in (None, "voice")]
     for event in sorted(others + merged_voice, key=lambda e: (e["start_s"], e["type"])):
         group = GROUP_OF.get(event["type"])
         folder = out_dir / "evidence" / group
@@ -156,13 +159,25 @@ def build_evidence(report, video, audio, cfg, out_dir):
                 "start_s": event["start_s"], "end_s": event["end_s"], "duration_s": event["duration_s"]}
         if "types" in event:                     # merged voice violation
             item["types"] = event["types"]
+        parts = event.get("parts", [event])
+        if any("event_id" in p for p in parts):          # FUS1: link the item to its fused event records
+            item.update(event_ids=[p["event_id"] for p in parts if "event_id" in p],
+                        score_contribution=round(sum(p.get("score_contribution", 0.0) for p in parts), 2),
+                        validation_reason="; ".join(p["validation_reason"] for p in parts if p.get("validation_reason")),
+                        related_event_ids=sorted({r for p in parts for r in p.get("related_event_ids", [])}
+                                                 - {p["event_id"] for p in parts if "event_id" in p}),
+                        severity=parts[0].get("severity"), observation_quality=parts[0].get("observation_quality"))
         if event["source"] == "video":
             item.update(_video_item(group, event, samples, cfg, folder, idx))
         else:
             item.update(_audio_item(event, audio, cfg, folder, idx))
-        if item.get("file"):
-            for part in event.get("parts", [event]):
+        # a reference is recorded only for a file that was actually written (never for missing media)
+        if item.get("file") and (out_dir / item["file"]).exists():
+            ref = {"evidence_id": item["id"], "file": item["file"],
+                   "kind": "audio_clip" if event["source"] == "audio" else "snapshot"}
+            for part in parts:
                 part["evidence"] = item["file"]  # also linked from the timeline events
+                part.setdefault("evidence_refs", []).append(ref)
         evidence[group]["items"].append(item)
     for group, data in evidence.items():
         if data["items"]:

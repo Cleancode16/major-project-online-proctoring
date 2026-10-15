@@ -96,6 +96,39 @@ def head_pose_template(template, landmarks, w, h, ids):
     return euler_from_matrix(relative_rotation(template, rigid_points(landmarks, w, h, ids)))
 
 
+def fit_residual(template, points, r=None):
+    """HP3: RMS distance (unit-radius face) between the rotated template and the observed rigid points.
+    High values = the landmarks do not fit a rigid head (mesh jitter, occlusion, wrong face)."""
+    q = normalize_points(points)
+    r = relative_rotation(template, points) if r is None else r
+    return float(np.sqrt(((template @ r.T - q) ** 2).sum(axis=1).mean()))
+
+
+# ---------------------------------------------------------------- HP3: candidate-specific adaptive thresholds
+AXES = ("yaw", "pitch", "roll")
+
+
+def axes(value):
+    """Per-axis setting as an array: a {yaw, pitch, roll} dict, or one number used for all three axes."""
+    if isinstance(value, dict):
+        return np.array([float(value[a]) for a in AXES])
+    return np.full(3, float(value or 0.0))
+
+
+def robust_sigma(values):
+    """1.4826 x median absolute deviation: equals the standard deviation for normal data, ignores outliers."""
+    x = np.asarray(values, dtype=np.float64)
+    if x.size == 0:
+        return float("nan")
+    return 1.4826 * float(np.median(np.abs(x - np.median(x))))
+
+
+def adaptive_thresholds(sigma, ac):
+    """clamp(base + k * robust_variability, min, max) per axis (deg)."""
+    return np.clip(axes(ac["base_deg"]) + axes(ac["k"]) * np.asarray(sigma, dtype=np.float64),
+                   axes(ac["min_deg"]), axes(ac["max_deg"]))
+
+
 def head_pose(landmarks, w, h, mode="fixed"):
     """Return (yaw, pitch, roll) in degrees, or None if PnP failed."""
     if mode == "legacy":

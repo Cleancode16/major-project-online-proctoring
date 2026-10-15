@@ -2,8 +2,8 @@ import { Wifi, WifiOff, CheckCircle, Clock, Loader } from 'lucide-react';
 
 // connectionState: RTCPeerConnection.connectionState ('new' | 'connecting' | 'connected' | 'disconnected' | 'failed' | 'closed')
 const Pill = ({ tone, Icon, spin, pulse, children }) => (
-  <span className={`badge ${tone} text-sm py-1.5 px-3`}>
-    <Icon className={`w-4 h-4 ${spin ? 'animate-spin' : ''} ${pulse ? 'animate-pulse' : ''}`} aria-hidden="true" />
+  <span className={`badge ${tone} h-6 px-2 text-xs`}>
+    <Icon className={`${spin ? 'animate-spin' : ''} ${pulse ? 'animate-pulse' : ''}`} aria-hidden="true" />
     {children}
   </span>
 );

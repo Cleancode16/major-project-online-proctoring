@@ -116,8 +116,9 @@ def annotated_snapshot(frame, s, cfg, width=640):
                      f"spoof below {thr:.2f})")
     if "rel_yaw" in s:
         hp = cfg["head_pose"]
+        lim = s.get("pose_thr") or (hp["yaw_thr"], hp["pitch_thr"], hp["roll_thr"])   # HP3: threshold in force
         lines.append(f"dYaw {s['rel_yaw']:+.0f}  dPitch {s['rel_pitch']:+.0f}  dRoll {s['rel_roll']:+.0f} deg "
-                     f"(limits {hp['yaw_thr']:.0f}/{hp['pitch_thr']:.0f}/{hp['roll_thr']:.0f})")
+                     f"(limits {lim[0]:.0f}/{lim[1]:.0f}/{lim[2]:.0f})")
     for i, text in enumerate(lines):
         label(text, 6, img.shape[0] - 8 - 20 * (len(lines) - 1 - i), (40, 40, 40))
     return cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 85])[1].tobytes()
@@ -168,6 +169,16 @@ class VideoAnalyzer:
         self.gaze_offset = np.zeros(2)        # slow baseline adaptation (ratio units)
         self.live_pose_prev = False           # hysteresis state for the live (causal) flags
         self.live_gaze_prev = False
+        # HP3 adaptive head-pose thresholds (set at calibration; None = fixed yaw_thr / pitch_thr / roll_thr)
+        self.pose_thr = self.pose_thr0 = None
+        self.pose_sigma = None                # robust variability per axis (threshold adaptation state)
+        self.pose_cal = None                  # calibration status / quality for the report
+        self.cal_rejected = {}                # reason -> calibration samples rejected
+        self.cal_prev = None                  # (t, pose) of the previous calibration observation (motion check)
+        self.pose_last = None                 # (t, rel_c) of the previous measured analysis sample
+        self.freeze_until = -math.inf         # adaptation recovery period end (s)
+        self.adapt_counts = {"updated": 0, "recovery": 0}
+        self.pose_quality_counts = {}
         self.face_tracks = []                 # MP2 static-face tracking
         # GZ3: L2CS-Net gaze (falls back to gaze.fallback if torch / the weights are unavailable)
         self.gaze_method, self.gaze_fallback, self.l2cs, self.ema_gaze = gz["method"], None, None, None
@@ -196,16 +207,31 @@ class VideoAnalyzer:
     def _calibrating(self):
         return self.baseline is None
 
-    def _calibration_add(self, t, pose, gz, identity_ok, pts=None):
+    def _calibration_add(self, t, pose, gz, identity_ok, pts=None, quality=()):
         cc = self.cfg["calibration"]
+        ac = self.cfg["head_pose"].get("adaptive", {})
         if self.cal_t0 is None:
             self.cal_t0 = t
         self.cal_seen += 1
-        accepted = pose is not None
-        if accepted and cc["require_identity"] and not identity_ok:
-            accepted = False
-        if accepted and (abs(pose[0]) > cc["max_abs_yaw"] or abs(pose[1]) > cc["max_abs_pitch"]):
-            accepted = False
+        reason = None
+        if pose is None:
+            reason = "no_face_or_landmarks"
+        elif cc["require_identity"] and not identity_ok:
+            reason = "identity_not_verified"
+        elif abs(pose[0]) > cc["max_abs_yaw"] or abs(pose[1]) > cc["max_abs_pitch"]:
+            reason = "not_frontal"
+        elif ac.get("enabled"):                 # HP3: unreliable calibration samples
+            if quality:
+                reason = quality[0]
+            elif self.cal_prev is not None and t > self.cal_prev[0]:
+                speed = np.max(np.abs(np.subtract(pose, self.cal_prev[1]))) / (t - self.cal_prev[0])
+                if speed > ac["cal_max_motion_deg_s"]:
+                    reason = "excessive_motion"
+        if pose is not None:
+            self.cal_prev = (t, pose)
+        accepted = reason is None
+        if reason:
+            self.cal_rejected[reason] = self.cal_rejected.get(reason, 0) + 1
         if accepted:
             for k, v in zip(("yaw", "pitch", "roll"), pose):
                 self.cal[k].append(v)
@@ -257,7 +283,48 @@ class VideoAnalyzer:
                 self.template = head_pose.build_template(point_sets)
             self.baseline["pose_method"] = "template" if self.template is not None else "pnp"
             self.baseline["template_samples"] = len(point_sets) if self.template is not None else 0
+            self._calibrate_thresholds(src, point_sets, fallback)
+            self.baseline["pose_confidence"] = self.pose_cal["confidence"]
         return accepted
+
+    def _fixed_thresholds(self):
+        hp = self.cfg["head_pose"]
+        return np.array([hp["yaw_thr"], hp["pitch_thr"], hp["roll_thr"]], dtype=np.float64)
+
+    def _calibrate_thresholds(self, src, point_sets, fallback):
+        """HP3: robust per-axis variability of the calibration angles -> candidate-specific thresholds."""
+        ac = self.cfg["head_pose"].get("adaptive", {})
+        n = len(src["yaw"])
+        info = {"adaptive": bool(ac.get("enabled")), "accepted_samples": n, "seen_samples": self.cal_seen,
+                "rejected_samples": dict(self.cal_rejected), "fallback_calibration": fallback,
+                "baseline_deg": {k: round(self.baseline[k], 2) for k in head_pose.AXES},
+                "method": self.baseline["pose_method"]}
+        thr, sigma, problems = self._fixed_thresholds(), None, []
+        if ac.get("enabled"):
+            if self.template is not None:       # angles of each calibration sample relative to the template
+                rel = np.array([head_pose.euler_from_matrix(head_pose.relative_rotation(self.template, p))
+                                for p in point_sets])
+            else:
+                rel = np.array([src[k] for k in head_pose.AXES]).T
+            sigma = np.array([head_pose.robust_sigma(rel[:, i]) for i in range(3)]) if len(rel) else np.full(3, np.nan)
+            if fallback:
+                problems.append("calibration fallback: no frontal, verified, steady sample in the calibration window")
+            if n < ac["min_valid_samples"]:
+                problems.append(f"only {n} valid calibration samples (minimum {ac['min_valid_samples']})")
+            if np.any(np.isnan(sigma)) or np.any(sigma > ac["max_cal_variability_deg"]):
+                problems.append("head not steady during calibration (robust variability "
+                                + "/".join(f"{v:.1f}" for v in sigma) + f" deg, limit {ac['max_cal_variability_deg']})")
+            if not problems:
+                thr = head_pose.adaptive_thresholds(sigma, ac)
+                self.pose_sigma = sigma.copy()  # threshold adaptation only starts from a trusted calibration
+            info["variability_deg"] = {k: (None if np.isnan(v) else round(float(v), 2))
+                                       for k, v in zip(head_pose.AXES, sigma)}
+        info.update(status="calibrated" if ac.get("enabled") and not problems else
+                    ("insufficient" if ac.get("enabled") else "fixed_thresholds"),
+                    confidence="normal" if not problems else "reduced",
+                    fallback_thresholds_used=bool(problems) or not ac.get("enabled"), problems=problems,
+                    initial_thresholds_deg={k: round(float(v), 2) for k, v in zip(head_pose.AXES, thr)})
+        self.pose_thr, self.pose_thr0, self.pose_cal = thr.copy(), thr.copy(), info
 
     def set_rate(self, rate):
         """FPS10: new sample rate (live: measured) -> recompute the windows and resize the causal smoothers."""
@@ -343,18 +410,21 @@ class VideoAnalyzer:
             if self.use_template:
                 pts = head_pose.rigid_points(landmarks, w, h, cfg["head_pose"]["rigid_ids"])
                 if self.template is not None:
-                    rel_template = head_pose.euler_from_matrix(head_pose.relative_rotation(self.template, pts))
+                    rot = head_pose.relative_rotation(self.template, pts)
+                    rel_template = head_pose.euler_from_matrix(rot)
+                    s["pose_fit_residual"] = round(head_pose.fit_residual(self.template, pts, rot), 4)
         s["pose_ok"] = pose is not None or rel_template is not None
         s["gaze_ok"] = bool(gz and gz.get("valid"))
+        quality = self._pose_quality(s)
 
         # calibration (needs the raw values before baseline exists)
         if self._calibrating():
-            s["calibration_accepted"] = self._calibration_add(t, pose, gz, bool(identity_ok), pts)
+            s["calibration_accepted"] = self._calibration_add(t, pose, gz, bool(identity_ok), pts, quality)
 
         t_mesh = time.perf_counter()
         self._flag_identity(s, identity_ok)
         self._flag_spoof(s, frame, subject)
-        self._flag_pose(s, pose, rel_template)
+        self._flag_pose(s, pose, rel_template, quality)
         self._flag_gaze(s, gz, pose)
         self._flag_scene(s, frame, faces)
         t_end = time.perf_counter()
@@ -458,11 +528,32 @@ class VideoAnalyzer:
                 s["spoof_mean"] = round(float(m), 3)
                 s["raw"][C.FACE_SPOOF] = bool(m < thr)
 
-    def _flag_pose(self, s, pose, rel_template=None):
+    def _pose_quality(self, s):
+        """HP3: reasons why this head-pose observation is low quality (still measured, but never used to calibrate
+        or adapt). A template fit above max_fit_residual is worse: the sample is left unmeasured (_flag_pose)."""
+        ac = self.cfg["head_pose"].get("adaptive", {})
+        if not ac.get("enabled") or not s["face_visible"]:
+            return ()
+        issues = []
+        if s.get("bbox") is not None and s["bbox"][2] < ac["min_face_px"]:
+            issues.append("face_too_small")
+        low = self.cfg.get("lighting", {}).get("low_mean")
+        if low is not None and s.get("brightness") is not None and s["brightness"] < low:
+            issues.append("low_light")
+        res = s.get("pose_fit_residual")
+        if res is not None and ac.get("max_fit_residual") and res > ac["max_fit_residual"]:
+            issues.append("unstable_landmarks")
+        if issues:
+            s["pose_quality_issues"] = issues
+        return tuple(issues)
+
+    def _flag_pose(self, s, pose, rel_template=None, quality=()):
         hp = self.cfg["head_pose"]
         if self.baseline is None or s["phase"] == "calibration":
             return
-        if rel_template is not None:            # HP2: relative to the candidate's own template
+        if "unstable_landmarks" in quality:     # HP3: unreliable -> unmeasured, never "normal"
+            rel = None
+        elif rel_template is not None:          # HP2: relative to the candidate's own template
             rel = np.array(rel_template, dtype=np.float64)
         elif pose is not None:                  # PnP relative to the calibration baseline
             rel = [pose[i] - self.baseline[k] for i, k in enumerate(("yaw", "pitch", "roll"))]
@@ -470,35 +561,85 @@ class VideoAnalyzer:
                 rel = [head_pose.wrap180(v) for v in rel]
             rel = np.array(rel, dtype=np.float64)
         else:
+            rel = None
+        key = "unreliable" if "unstable_landmarks" in quality else (
+            "unmeasured" if rel is None else ("low_quality" if quality else "good"))
+        self.pose_quality_counts[key] = self.pose_quality_counts.get(key, 0) + 1
+        if rel is None:
+            s["pose_ok"] = s["pose_ok"] and key != "unreliable"
+            self.live_pose_prev = False         # same as offline: hysteresis does not carry over a gap
             return
         s.update(raw_rel_yaw=float(rel[0]), raw_rel_pitch=float(rel[1]), raw_rel_roll=float(rel[2]))
         rel_c = rel - self.pose_offset
-        self._adapt_pose(rel)
         s.update(rel_yaw=float(rel_c[0]), rel_pitch=float(rel_c[1]), rel_roll=float(rel_c[2]))
+        thr = self._pose_thresholds()
+        s["pose_thr"] = [round(float(v), 2) for v in thr]      # threshold in force (audit + offline recompute)
         # live status uses a causal median; finalize() recomputes with a zero-lag centred median
-        live = [self.sm[k](v) for k, v in zip(("yaw", "pitch", "roll"), rel_c)]
-        self.live_pose_prev = self._pose_deviates(*live, prev=self.live_pose_prev)
+        live = np.array([self.sm[k](v) for k, v in zip(("yaw", "pitch", "roll"), rel_c)])
+        self.live_pose_prev = self._pose_deviates(*live, prev=self.live_pose_prev, thr=thr)
         s["raw"][C.HEAD_POSE_DEVIATION] = self.live_pose_prev
+        self._adapt_pose(s, rel, rel_c, live, thr, quality)
 
     def _pose_thresholds(self):
-        hp = self.cfg["head_pose"]
-        return np.array([hp["yaw_thr"], hp["pitch_thr"], hp["roll_thr"]], dtype=np.float64)
+        """Thresholds in force (deg): adaptive after calibration (HP3), else the fixed yaw_thr / pitch_thr / roll_thr."""
+        return self.pose_thr.copy() if self.pose_thr is not None else self._fixed_thresholds()
 
-    def _adapt_pose(self, rel):
-        """HP2 slow baseline adaptation: only from clearly normal samples, capped (flow.txt §A.5)."""
+    def _adapt_pose(self, s, rel, rel_c, smoothed, thr, quality):
+        """
+        HP2 slow baseline adaptation + HP3 threshold adaptation (separate states, same freeze rules).
+        Frozen while: low-quality observation, deviation (live hysteresis state), any axis (current or smoothed) at
+        or above adapt_below_frac of its threshold, abrupt movement, a measurement gap; and for recovery_s afterwards.
+        A sustained head turn therefore never becomes the baseline, and large movements never raise the thresholds.
+        """
         hp = self.cfg["head_pose"]
+        ac = hp.get("adaptive", {})
         tau = hp.get("adapt_tau_s")
-        if not tau:
+        if not ac.get("enabled"):               # HP2 behaviour (adaptive thresholds off)
+            if tau and np.all(np.abs(rel - self.pose_offset) < thr / 2):
+                self.pose_offset = np.clip(self.pose_offset + (rel - self.pose_offset) * min(1.0, (1.0 / self.rate) / tau),
+                                           -hp["adapt_max_deg"], hp["adapt_max_deg"])
             return
-        c = rel - self.pose_offset
-        if np.all(np.abs(c) < self._pose_thresholds() / 2):
-            self.pose_offset = np.clip(self.pose_offset + c * min(1.0, (1.0 / self.rate) / tau),
-                                       -hp["adapt_max_deg"], hp["adapt_max_deg"])
+        t = s["t"]
+        last, self.pose_last = self.pose_last, (t, rel_c)
+        dt = t - last[0] if last is not None else None
+        reasons = list(quality)
+        if self.live_pose_prev:
+            reasons.append("deviation")
+        # both the current measurement and the (lagging) causal median must be clearly normal
+        if np.any(np.maximum(np.abs(smoothed), np.abs(rel_c)) >= ac["adapt_below_frac"] * thr):
+            reasons.append("near_threshold")
+        if dt is None or dt > ac["max_gap_s"]:
+            reasons.append("measurement_gap")
+        elif dt > 0 and np.max(np.abs(rel_c - last[1])) / dt > ac["abrupt_deg_s"]:
+            reasons.append("abrupt_motion")
+        if reasons:
+            self.freeze_until = t + ac["recovery_s"]
+            for r in reasons:
+                self.adapt_counts[r] = self.adapt_counts.get(r, 0) + 1
+            s["pose_adapt"] = "frozen: " + ", ".join(reasons)
+            return
+        if t < self.freeze_until:
+            self.adapt_counts["recovery"] += 1
+            s["pose_adapt"] = "recovery"
+            return
+        if tau:                                 # baseline: per-update and total drift limits
+            step = np.clip(rel_c * min(1.0, dt / tau), -ac["adapt_max_step_deg"], ac["adapt_max_step_deg"])
+            self.pose_offset = np.clip(self.pose_offset + step, -hp["adapt_max_deg"], hp["adapt_max_deg"])
+        if self.pose_sigma is not None and ac.get("thr_adapt_tau_s"):
+            # robust scale from |deviation| of steady samples (sigma ~ 1.2533 * mean |x| for normal data); the
+            # samples are already gated below adapt_below_frac of the threshold, so the estimate cannot inflate
+            a = min(1.0, dt / ac["thr_adapt_tau_s"])
+            self.pose_sigma = self.pose_sigma + a * (1.2533 * np.abs(rel_c) - self.pose_sigma)
+            shift = head_pose.axes(ac["thr_max_shift_deg"])
+            self.pose_thr = np.clip(head_pose.adaptive_thresholds(self.pose_sigma, ac),
+                                    self.pose_thr0 - shift, self.pose_thr0 + shift)
+        self.adapt_counts["updated"] += 1
+        s["pose_adapt"] = "updated"
 
-    def _pose_deviates(self, ry, rp, rr, prev=False):
+    def _pose_deviates(self, ry, rp, rr, prev=False, thr=None):
         """Deviation with hysteresis: once deviating, every axis must drop below threshold - hyst_deg to end it."""
-        hyst = self.cfg["head_pose"].get("hyst_deg", 0.0) if prev else 0.0
-        thr = self._pose_thresholds() - hyst
+        hyst = head_pose.axes(self.cfg["head_pose"].get("hyst_deg", 0.0)) if prev else np.zeros(3)
+        thr = (self._pose_thresholds() if thr is None else np.asarray(thr, dtype=np.float64)) - hyst
         return bool(abs(ry) > thr[0] or abs(rp) > thr[1] or abs(rr) > thr[2])
 
     def _recompute_pose_offline(self):
@@ -511,7 +652,9 @@ class VideoAnalyzer:
         prev = False
         for i, s in enumerate(self.samples):
             if C.HEAD_POSE_DEVIATION in s["raw"] and not np.isnan(sm["rel_yaw"][i]):
-                prev = self._pose_deviates(sm["rel_yaw"][i], sm["rel_pitch"][i], sm["rel_roll"][i], prev=prev)
+                # HP3: the threshold that was in force for this sample (same as live, so live == offline)
+                prev = self._pose_deviates(sm["rel_yaw"][i], sm["rel_pitch"][i], sm["rel_roll"][i], prev=prev,
+                                           thr=s.get("pose_thr"))
                 s["raw"][C.HEAD_POSE_DEVIATION] = prev
             else:
                 prev = False   # no measurement: the hysteresis state does not carry over a gap
@@ -549,8 +692,8 @@ class VideoAnalyzer:
             return
         if self.baseline.get("gaze_h") is None:
             # DET2: no usable forward gaze from calibration -> collect it from frontal analysis samples first
-            hp = self.cfg["head_pose"]
-            frontal = abs(s.get("rel_yaw", 99)) < hp["yaw_thr"] / 2 and abs(s.get("rel_pitch", 99)) < hp["pitch_thr"] / 2
+            thr = self._pose_thresholds()
+            frontal = abs(s.get("rel_yaw", 99)) < thr[0] / 2 and abs(s.get("rel_pitch", 99)) < thr[1] / 2
             if frontal and self._gaze_cal_ok(gz):
                 self.late_gaze.append((gz["h"], gz["v"]))
             if len(self.late_gaze) < max(lc.get("cal_min_samples", 3), 5):
@@ -717,7 +860,27 @@ class VideoAnalyzer:
             "gaze_fallback": self.gaze_fallback,
             "antispoof": "minifasnet" if self.fas is not None else None,
             "antispoof_error": self.fas_error,
+            "head_pose": self.pose_summary(),
         }
+
+    def pose_summary(self):
+        """HP3 audit block: calibration quality, initial / final thresholds, deviations, observation quality."""
+        r2 = lambda v: {k: round(float(x), 2) for k, x in zip(head_pose.AXES, v)}  # noqa: E731
+        measured = [s for s in self.samples if "rel_yaw" in s and s["phase"] != "calibration"]
+        dev = {}
+        for k in head_pose.AXES:
+            a = np.abs([s[f"rel_{k}"] for s in measured])
+            dev[k] = ({"median_abs": round(float(np.median(a)), 2), "p95_abs": round(float(np.percentile(a, 95)), 2),
+                       "max_abs": round(float(a.max()), 2)} if len(a) else None)
+        n_analysis = sum(1 for s in self.samples if s["phase"] != "calibration")
+        return {"calibration": self.pose_cal, "final_thresholds_deg": r2(self._pose_thresholds()),
+                "baseline_drift_deg": r2(self.pose_offset),
+                "deviation_deg": dev,
+                "observations": {"analysis_samples": n_analysis, "measured": len(measured),
+                                 "measured_duration_s": round(len(measured) / self.rate, 2) if self.rate else 0.0,
+                                 "unavailable_duration_s": round((n_analysis - len(measured)) / self.rate, 2)
+                                 if self.rate else 0.0, "quality": dict(self.pose_quality_counts)},
+                "adaptation": dict(self.adapt_counts)}
 
 
 def analyze_video(path, ref_embedding, cfg, progress=None):

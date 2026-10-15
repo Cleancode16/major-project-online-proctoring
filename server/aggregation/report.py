@@ -25,6 +25,23 @@ def _jsonable(o):
     return str(o)
 
 
+def _limitations(core, video, audio):
+    """FUS1: what the result cannot say (missing checks, model fallbacks, uncalibrated scores)."""
+    out = ["Detector scores (YOLO, YAMNet, similarity, liveness) are not calibrated probabilities; the risk score is "
+           "a rule-based summary of validated events, not a probability of misconduct."]
+    missing = (core.get("assessment") or {}).get("missing_checks") or []
+    if missing:
+        out.append("Not checked in this session: " + ", ".join(m.lower().replace("_", " ") for m in missing) + ".")
+    if video and video.get("gaze_fallback"):
+        out.append("Gaze used the fallback method: " + video["gaze_fallback"])
+    if video and video.get("antispoof_error"):
+        out.append("Liveness check unavailable: " + video["antispoof_error"])
+    if audio and audio.get("status") == "ok":
+        out.append("Audio quality is only measured for speaker decisions (speech fraction); whispering and sound events "
+                   "have no per-event quality measure.")
+    return out
+
+
 def build_report(video, audio, cfg, meta=None):
     core = aggregate(video, audio, cfg)
     warnings = []
@@ -32,6 +49,10 @@ def build_report(video, audio, cfg, meta=None):
         warnings.append("Head-pose/gaze baseline was not calibrated: pose and gaze were not evaluated.")
     elif video and video["baseline"].get("fallback"):
         warnings.append("Calibration used the fallback (no frontal, verified sample in the first 10 s).")
+    pcal = ((video or {}).get("head_pose") or {}).get("calibration") or {}
+    if pcal.get("adaptive") and pcal.get("confidence") == "reduced":   # HP3
+        warnings.append("HEAD_POSE_CALIBRATION_REDUCED: fixed head-pose thresholds were used ("
+                        + "; ".join(pcal.get("problems", [])) + ").")
     if video and video.get("gaze_fallback"):            # GZ3: L2CS-Net could not be loaded
         warnings.append(video["gaze_fallback"])
     if video and video.get("antispoof_error"):          # FAS1: anti-spoofing could not be loaded
@@ -58,14 +79,24 @@ def build_report(video, audio, cfg, meta=None):
                  "python": platform.python_version(), **meta},
         "verdict": {"label": core["verdict"], "headline": core["reasons"][0] if core["reasons"] else "",
                     "reasons": core["reasons"], "score": core["score"],
-                    "score_explanation": core["score_explanation"]},
+                    "score_explanation": core["score_explanation"],
+                    # BUF1: VALID / SUSPICIOUS / INVALID stay for the frontend; coverage is reported separately
+                    "assessment_status": (core.get("assessment") or {}).get("status", "COMPLETE"),
+                    "review_priority": (core.get("assessment") or {}).get("review_priority")},
+        "assessment": core.get("assessment"),
+        # FUS1: every event record (confirmed, uncertain, filtered, unavailable), chronological, with stable ids;
+        # "timeline" keeps the confirmed + uncertain ones (same objects) for older readers
+        "events": core.get("events"),
+        "fusion": core.get("fusion"),
+        "limitations": _limitations(core, video, audio),
         "per_violation": core["per_violation"],
         "group_percentages": core["group_percentages"],
         "timeline": core["timeline"],
         "video": None if not video else {
             **video.get("video", {}), "n_samples": len(video["samples"]), "sample_rate_hz": video["rate_hz"],
             "baseline": video["baseline"], "calibration": video["calibration"],
-            "gaze_method": video.get("gaze_method"), "antispoof": video.get("antispoof")},
+            "gaze_method": video.get("gaze_method"), "antispoof": video.get("antispoof"),
+            "head_pose": video.get("head_pose")},          # HP3 adaptive thresholds audit
         "audio": None if audio is None else {k: audio.get(k) for k in
                                              ("status", "duration_s", "speech_s", "vad_engine", "voiceprint", "segments",
                                               "vad_rejected")},
@@ -111,6 +142,14 @@ def console_summary(report):
         if b:
             lines.append(f"Baseline head pose: yaw={b['yaw']:.1f} pitch={b['pitch']:.1f} roll={b['roll']:.1f} "
                          f"({b['n_samples']} calibration samples)")
+        hp = vid.get("head_pose") or {}
+        if hp.get("calibration"):                    # HP3
+            c, fin = hp["calibration"], hp["final_thresholds_deg"]
+            ini = c["initial_thresholds_deg"]
+            lines.append(f"Head-pose thresholds ({c['status']}, confidence {c['confidence']}): "
+                         f"yaw/pitch/roll {ini['yaw']:.1f}/{ini['pitch']:.1f}/{ini['roll']:.1f} deg at calibration, "
+                         f"{fin['yaw']:.1f}/{fin['pitch']:.1f}/{fin['roll']:.1f} deg at the end"
+                         + (" (fixed fallback)" if c["fallback_thresholds_used"] else ""))
     a = report.get("audio") or {}
     lines.append(f"Audio: {a.get('status', 'not analysed')}"
                  + (f", {a.get('duration_s', 0):.1f} s, speech {a.get('speech_s', 0):.1f} s, VAD {a.get('vad_engine')}"
@@ -123,9 +162,30 @@ def console_summary(report):
             continue
         basis = f"{s['numerator']}/{s['denominator']} {s['unit']}"
         lines.append(f"{t:22s}{s['percentage']:8.1f}{s['duration_s']:9.1f}{s['count']:8d}  {basis}")
+    if report.get("fusion"):                         # FUS1 evidence families
+        lines.append("-" * 60)
+        lines.append("Evidence families (confirmed events, points, de-duplicated s):  " + "  ".join(
+            f"{n} {f['confirmed_events']}/{f['points']:.1f}/{f['deduplicated_s']:.1f}"
+            for n, f in report["fusion"]["families"].items() if f["confirmed_events"] or f["uncertain_events"]))
+        a = report["assessment"]
+        lines.append(f"Review: {a['status']} (priority {a['review_priority']}), events " +
+                     ", ".join(f"{k} {v}" for k, v in a["event_counts"].items()))
+    if report.get("assessment"):                     # BUF1 tolerance buffer
+        lines.append("-" * 60)
+        lines.append(f"{'Buffer':22s}{'raw':>6s}{'filt':>6s}{'merged':>8s}{'conf':>6s}{'unconf':>8s}  strength")
+        for t, s in report["per_violation"].items():
+            if s["measurable"] and s.get("merged_event_count"):
+                lines.append(f"{t:22s}{s['raw_detection_count']:6d}{s['filtered_detection_count']:6d}"
+                             f"{s['merged_event_count']:8d}{s['confirmed_event_count']:6d}"
+                             f"{s['unconfirmed_event_count']:8d}  {s['evidence_strength']}"
+                             + ("  REVIEW" if s.get("review_required") else ""))
+        a = report["assessment"]
+        lines.append(f"Assessment: {a['status']}" + (" - " + "; ".join(a["coverage"]["problems"])
+                                                     if a["coverage"]["problems"] else ""))
     lines.append("-" * 60)
     for e in report["timeline"][:20]:
-        lines.append(f"  {e['start_s']:7.2f}-{e['end_s']:7.2f}s  {e['source']:5s} {e['type']}")
+        tag = "" if e.get("status", "confirmed") == "confirmed" else "  (unconfirmed)"
+        lines.append(f"  {e['start_s']:7.2f}-{e['end_s']:7.2f}s  {e['source']:5s} {e['type']}{tag}")
     if len(report["timeline"]) > 20:
         lines.append(f"  ... {len(report['timeline']) - 20} more events in the JSON report")
     for w in report["warnings"]:

@@ -1,0 +1,41 @@
+{
+  "group": "voice",
+  "items": [
+    {
+      "id": "voice-001",
+      "type": "VOICE_MISMATCH",
+      "source": "audio",
+      "start_s": 6.0,
+      "end_s": 8.88,
+      "duration_s": 2.88,
+      "types": [
+        "VOICE_MISMATCH"
+      ],
+      "event_ids": [
+        "voice_mismatch-001"
+      ],
+      "score_contribution": 30.0,
+      "validation_reason": "confirmed: 2.88 s with 6 validated observation(s) (needs >= 2.0 s and >= 3)",
+      "related_event_ids": [
+        "prohibited_object-001",
+        "speech_detected-001",
+        "suspicious_sound-001"
+      ],
+      "severity": "critical",
+      "observation_quality": "good",
+      "details": {
+        "VOICE_MISMATCH": {
+          "min_similarity": 0.503,
+          "threshold": 0.72
+        }
+      },
+      "file": "evidence/voice/01_voice_mismatch_6.0s.wav",
+      "clip_start_s": 5.5,
+      "clip_end_s": 9.38,
+      "speech_s_in_event": 2.75,
+      "speaker_similarity_min": 0.503,
+      "speaker_threshold": 0.72,
+      "whisper_score_max": 0.0
+    }
+  ]
+}

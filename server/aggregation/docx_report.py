@@ -20,7 +20,8 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Mm, Pt, RGBColor
 
-from aggregation.pdf_report import (DOC_GROUPS, GROUPS, VERDICT_STYLE, _find_evidence_dir, counter_cells, fmt_t,
+from aggregation.pdf_report import (DOC_GROUPS, GROUPS, VERDICT_STYLE, _find_evidence_dir, assessment_lines, counter_cells,
+                                    event_rows, family_rows, fmt_t,
                                     limits_text, nice, points_text, score_rows)
 
 INK = RGBColor(0x0F, 0x17, 0x2A)
@@ -233,16 +234,45 @@ def _caption(group, it):
     return base
 
 
+def _fusion(doc, report):
+    """FUS1: assessment, evidence families and limitations."""
+    lines = assessment_lines(report)
+    if not lines:
+        return
+    heading(doc, "Assessment and evidence fusion")
+    for x in lines:
+        para(doc, f"- {x}", size=8)
+    rows = family_rows(report)
+    if rows:
+        table(doc, rows, [40, 64, 18, 18, 20, 20])
+
+
 def _events(doc, report):
-    tl = report.get("timeline", [])
-    if not tl:
+    rows, n_filtered = event_rows(report)
+    if len(rows) == 1:
         return
     heading(doc, "All events")
-    rows = [["Start", "End", "Duration", "Source", "Violation", "Details"]]
-    for e in tl:
-        rows.append([fmt_t(e["start_s"]), fmt_t(e["end_s"]), f"{e['duration_s']:.1f} s", e["source"], nice(e["type"]),
-                     json.dumps(e.get("details") or {})[:160]])
-    table(doc, rows, [18, 18, 18, 14, 38, 74])
+    table(doc, rows, [16, 16, 38, 20, 16, 13, 61])
+    if n_filtered:
+        para(doc, f"{n_filtered} filtered raw detection run(s) are listed in the JSON report (not scored).", size=8)
+
+
+def _head_pose_line(report, hp):
+    """HP3: adaptive (per-session) head-pose thresholds when present, else the fixed ones."""
+    c = (((report.get("video") or {}).get("head_pose") or {}).get("calibration")) or {}
+    tail = f", for {hp.get('persist_s')} s (method {hp.get('method', 'pnp')})"
+    if not c.get("adaptive"):
+        return f"Head pose: yaw {hp.get('yaw_thr')} / pitch {hp.get('pitch_thr')} / roll {hp.get('roll_thr')} deg" + tail
+    ini = c["initial_thresholds_deg"]
+    fin = report["video"]["head_pose"]["final_thresholds_deg"]
+    b = c["baseline_deg"]
+    text = (f"Head pose (adaptive, calibration {c['status']}, confidence {c['confidence']}, "
+            f"{c['accepted_samples']} of {c['seen_samples']} calibration samples accepted): thresholds yaw/pitch/roll "
+            f"{ini['yaw']}/{ini['pitch']}/{ini['roll']} deg at calibration, {fin['yaw']}/{fin['pitch']}/{fin['roll']} "
+            f"deg at the end; baseline {b['yaw']}/{b['pitch']}/{b['roll']} deg")
+    if c.get("fallback_thresholds_used"):
+        text += "; fixed fallback thresholds used: " + "; ".join(c.get("problems", []))
+    return text + tail
 
 
 def _thresholds(doc, report):
@@ -250,8 +280,7 @@ def _thresholds(doc, report):
     hp, gz, ob, ev = th.get("head_pose", {}), th.get("gaze", {}), th.get("objects", {}), th.get("evidence", {})
     heading(doc, "Thresholds used")
     lines = [
-        f"Head pose: yaw {hp.get('yaw_thr')} / pitch {hp.get('pitch_thr')} / roll {hp.get('roll_thr')} deg, "
-        f"for {hp.get('persist_s')} s (method {hp.get('method', 'pnp')})",
+        _head_pose_line(report, hp),
         f"Gaze: {gz.get('h_thr_deg')} deg horizontal / {gz.get('v_thr_deg')} deg vertical, for {gz.get('persist_s')} s",
         f"Face match threshold (cosine): {th.get('face', {}).get('cos_threshold')}; "
         f"voice match threshold: {th.get('speaker', {}).get('verify_thr')}",
@@ -287,6 +316,7 @@ def build_docx(report, evidence_dir, out_path):
     doc.core_properties.author = "Online Proctoring System"
     _header(doc, report)
     _verdict(doc, report)
+    _fusion(doc, report)
     _summary(doc, report)
     _scoring(doc, report)
     _evidence_counters(doc, report)

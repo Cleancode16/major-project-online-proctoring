@@ -1,4 +1,4 @@
-﻿"""
+"""
 G1 aggregation: hand-built inputs with hand-computed expected values, every verdict path,
 the legacy verdict on the real clip, and the saved report (JSON keys + evidence files).
 
@@ -77,11 +77,13 @@ def stats_math():
     check("speech seconds", pv[C.SPEECH_DETECTED]["numerator"], 4.8)
     check("speech %", pv[C.SPEECH_DETECTED]["percentage"], 8.0)
     check("suspicious %", pv[C.SUSPICIOUS_SOUND]["percentage"], 2.4)
-    # SC2 score by hand = sum of points: objects 13.33/10 -> full 35, head 12.5/25 = .5 * 10 = 5,
-    # face 10/20 = .5 * 12 = 6, speech 8/20 = .4 * 6 = 2.4, suspicious 2.4/20 = .12 * 6 = 0.72; others 0
-    check("score", r["score"], round(35 + 5 + 6 + 2.4 + 0.72, 1))
+    # SC2 + BUF1 score by hand = sum of points over CONFIRMED time: objects 1.33 s >= 1 s confirmed, 13.33/10 ->
+    # full 35; head pose 1.0 s < 1.5 s and face 1.0 s < 2.0 s are unconfirmed -> 0; speech 4.8 s confirmed,
+    # 8/20 = .4 * 6 = 2.4; suspicious sound 1.44 s confirmed but inside its 2 s grace budget -> 0
+    check("score", r["score"], round(35 + 2.4, 1))
     check("objects points", pv[C.PROHIBITED_OBJECT]["score"], 35.0)
-    check("head pose points", pv[C.HEAD_POSE_DEVIATION]["score"], 5.0)
+    check("head pose points (unconfirmed)", pv[C.HEAD_POSE_DEVIATION]["score"], 0.0)
+    check("head pose % still reported", pv[C.HEAD_POSE_DEVIATION]["percentage"], 12.5)
     check("every type has an explanation", all(st.get("score_explanation") for st in pv.values()), True)
     check("overall explanation lists objects", "prohibited object 35.0" in r["score_explanation"], True)
     check("timeline sorted, video+audio", [e["source"] for e in r["timeline"]].count("audio"), 2)
@@ -111,10 +113,13 @@ def scoring_and_limits():
     print("(2b) SC2 points (critical floor, severity order) and LIM2 percentage limits")
     from aggregation import evidence as ev
     cfg = C.get_config("v2")
-    # one phone sample out of 300 (0.4%): 0.4/10 * 35 = 1.4 -> raised to the critical floor 17.5
+    # BUF1: one phone sample (0.33 s) is an unconfirmed event: no points, but a critical type still goes to review
     r = aggregate(video(300, 3, {C.PROHIBITED_OBJECT: [100]}), audio(100.0), cfg)
-    check("single phone sample -> critical floor 17.5", r["per_violation"][C.PROHIBITED_OBJECT]["score"], 17.5)
-    check("single phone sample -> SUSPICIOUS", r["verdict"], "SUSPICIOUS")
+    check("single phone sample -> 0 points (unconfirmed)", r["per_violation"][C.PROHIBITED_OBJECT]["score"], 0.0)
+    check("single phone sample -> SUSPICIOUS (review)", r["verdict"], "SUSPICIOUS")
+    # a confirmed phone event (2 s) of 0.67%: 0.67/10 * 35 = 2.3 -> raised to the critical floor 17.5
+    r = aggregate(video(300, 3, {C.PROHIBITED_OBJECT: list(range(100, 106))}), audio(100.0), cfg)
+    check("confirmed phone 2 s -> critical floor 17.5", r["per_violation"][C.PROHIBITED_OBJECT]["score"], 17.5)
     # gaze away all the time scores less than a brief head turn would at the same % (gaze lowest)
     mp = cfg["aggregation"]["max_points"]
     check("gaze max < head pose max < critical max",
@@ -135,6 +140,69 @@ def scoring_and_limits():
     check("voice 6.4% > 5% exceeded", c["voice"]["exceeded"], True)
     rep_["evidence"]["object"]["items"] = [{}]
     check("one object event exceeded (any detection)", ev.counters(rep_, cfg)["object"]["exceeded"], True)
+
+
+def buffer_regression():
+    print("(2c) BUF1 tolerance buffer, coverage and assessment status")
+    from aggregation import evidence as ev
+    cfg = C.get_config("v2")
+    ok = audio(100.0)
+    # brief false detections: three isolated 1-sample person blips far apart -> 3 unconfirmed events, 0 points
+    r = aggregate(video(300, 3, {C.MULTIPLE_PERSONS: [50, 120, 200]}), ok, cfg)
+    st = r["per_violation"][C.MULTIPLE_PERSONS]
+    check("blips: 3 raw detections", st["raw_detection_count"], 3)
+    check("blips: 3 unconfirmed / 0 confirmed", (st["unconfirmed_event_count"], st["confirmed_event_count"]), (3, 0))
+    check("blips: 0 points", st["score"], 0.0)
+    check("blips: weak evidence, review", (st["evidence_strength"], st["review_required"]), ("weak", True))
+    check("blips: kept in timeline as unconfirmed",
+          [e["status"] for e in r["timeline"] if e["type"] == C.MULTIPLE_PERSONS], ["unconfirmed"] * 3)
+    check("blips: no evidence counter (group %)", r["group_percentages"]["multiple_faces"], 0.0)
+    # merging: two 0.67 s runs 0.67 s apart -> one 2 s merged event, confirmed
+    r = aggregate(video(300, 3, {C.MULTIPLE_PERSONS: [50, 51, 54, 55]}), ok, cfg)
+    st = r["per_violation"][C.MULTIPLE_PERSONS]
+    check("merge: 2 runs -> 1 confirmed event", (st["merged_event_count"], st["confirmed_event_count"]), (1, 1))
+    check("merge: confirmed time counts flagged samples only", st["confirmed_duration_s"], round(4 / 3, 2))
+    # prolonged real violation: 10 s second person -> strong evidence, INVALID
+    r = aggregate(video(300, 3, {C.MULTIPLE_PERSONS: list(range(60, 90))}), ok, cfg)
+    check("prolonged: INVALID", r["verdict"], "INVALID")
+    check("prolonged: strong evidence", r["per_violation"][C.MULTIPLE_PERSONS]["evidence_strength"], "strong")
+    # correlated: gaze away only while the head is turned -> gaze time is scored once, by head pose
+    turn = list(range(30, 60))
+    r = aggregate(video(300, 3, {C.HEAD_POSE_DEVIATION: turn, C.GAZE_AWAY: turn}), ok, cfg)
+    g, h = r["per_violation"][C.GAZE_AWAY], r["per_violation"][C.HEAD_POSE_DEVIATION]
+    check("correlated: gaze overlap removed", g["correlated_duration_s"], 10.0)
+    check("correlated: gaze 0 points", g["score"], 0.0)
+    check("correlated: head pose scored (10 s - 3 s grace)", h["scored_duration_s"], 7.0)
+    # session grace: 4 s of head pose in a 100 s session -> 1 s scored
+    r = aggregate(video(300, 3, {C.HEAD_POSE_DEVIATION: list(range(30, 42))}), ok, cfg)
+    check("grace: 4 s - 3 s grace = 1 s scored", r["per_violation"][C.HEAD_POSE_DEVIATION]["scored_duration_s"], 1.0)
+    # missing model output: no voiceprint -> VOICE_MISMATCH not measurable, no buffer review
+    r = aggregate(video(300, 3), audio(100.0, voiceprint=False), cfg)
+    check("no voiceprint: not measurable", r["per_violation"][C.VOICE_MISMATCH]["measurable"], False)
+    check("no voiceprint: VALID", r["verdict"], "VALID")
+    # poor camera input: 80% dark samples -> INCONCLUSIVE, never VALID
+    v = video(300, 3)
+    for i, s in enumerate(v["samples"]):
+        s["brightness"] = 20.0 if i % 5 else 120.0
+    r = aggregate(v, ok, cfg)
+    check("dark: assessment INCONCLUSIVE", r["assessment"]["status"], "INCONCLUSIVE")
+    check("dark: SUSPICIOUS not VALID", r["verdict"], "SUSPICIOUS")
+    check("dark: retest reason", any("retest" in x for x in r["reasons"]), True)
+    # insufficient monitoring: 3 s of video
+    r = aggregate(video(9, 3), audio(3.0), cfg)
+    check("short session: INCONCLUSIVE", (r["assessment"]["status"], r["verdict"]), ("INCONCLUSIVE", "SUSPICIOUS"))
+    check("clean session: COMPLETE",
+          aggregate(video(300, 3), ok, cfg)["assessment"]["status"], "COMPLETE")
+    # evidence counters only see confirmed events (one 0.33 s phone blip must not mark the session violated)
+    r = aggregate(video(300, 3, {C.PROHIBITED_OBJECT: [100]}), ok, cfg)
+    confirmed = [e for e in r["timeline"] if e.get("status", "confirmed") == "confirmed"
+                 and ev.GROUP_OF.get(e["type"]) == "object"]
+    check("blip phone: no confirmed object evidence", len(confirmed), 0)
+    # every type documents its policy, validation status and an uncalibrated-confidence note
+    st = r["per_violation"][C.PROHIBITED_OBJECT]
+    check("policy in report", st["buffer_policy"]["confirm_s"], cfg["buffer"]["policies"][C.PROHIBITED_OBJECT]["confirm_s"])
+    check("no fake validation metrics", st["validation_metrics"].get("status"), "not measured on a labelled set")
+    check("confidence not claimed calibrated", st["calibrated_confidence"], None)
 
 
 def legacy_on_clip():
@@ -164,6 +232,7 @@ def main():
     stats_math()
     verdicts()
     scoring_and_limits()
+    buffer_regression()
     legacy_on_clip()
     saved_report()
     print("G1 AGGREGATION:", "PASS" if not FAILS else f"FAIL {FAILS}")

@@ -67,6 +67,8 @@ V2 = {
     # §A.5 head pose
     "head_pose": {
         "euler": "fixed",       # "fixed" (camera-convention model) or "legacy"
+        # Fixed thresholds (deg). HP3: used only as the FALLBACK when adaptive thresholds are off or the
+        # calibration quality is insufficient (calibration confidence "reduced").
         "yaw_thr": 15.0,
         "pitch_thr": 10.0,
         "roll_thr": 10.0,
@@ -77,9 +79,38 @@ V2 = {
         "method": "template",   # "template" (person-specific 3D landmark alignment) or "pnp" (generic 6-point model)
         "rigid_ids": [10, 109, 67, 103, 54, 338, 297, 332, 284, 151, 9, 8, 168, 6, 197, 195, 5, 4, 1, 98, 327,
                       33, 133, 362, 263, 234, 454, 127, 356, 93, 323, 116, 345],
-        "hyst_deg": 3.0,        # deviation ends only below threshold - hyst
+        # deviation ends only when every axis is below threshold - hyst (HP3: per axis; a number = all axes)
+        "hyst_deg": {"yaw": 3.0, "pitch": 2.0, "roll": 2.0},
         "adapt_tau_s": 120.0,   # slow baseline adaptation time constant (None = off)
-        "adapt_max_deg": 8.0,   # adaptation never moves the baseline further than this
+        "adapt_max_deg": 8.0,   # adaptation never moves the baseline further than this (total drift, each axis)
+        # HP3 candidate-specific adaptive thresholds (video/pipeline.py, flow.txt §A.5). Calibration window and
+        # frontal gate: "calibration" block; smoothing: smooth_s; persistence: persist_s; baseline rate: adapt_tau_s.
+        # INITIAL VALUES FOR EVALUATION, not validated thresholds.
+        #   threshold = clamp(base_deg + k * robust_variability, min_deg, max_deg)
+        #   robust_variability = 1.4826 * MAD of the calibration angles (relative to the candidate's template)
+        "adaptive": {
+            "enabled": True,
+            "base_deg": {"yaw": 12.0, "pitch": 8.0, "roll": 8.0},
+            "k": {"yaw": 2.0, "pitch": 2.0, "roll": 2.0},
+            "min_deg": {"yaw": 10.0, "pitch": 7.0, "roll": 7.0},
+            "max_deg": {"yaw": 25.0, "pitch": 18.0, "roll": 18.0},
+            # calibration quality: below min_valid_samples, above max_cal_variability_deg on any axis, or the
+            # calibration fallback -> fixed yaw_thr/pitch_thr/roll_thr, confidence "reduced", no threshold adaptation
+            "min_valid_samples": 8,
+            "max_cal_variability_deg": 4.0,
+            "cal_max_motion_deg_s": 30.0,  # calibration sample rejected when the head turns faster than this
+            # observation quality
+            "min_face_px": 60,             # smaller face box -> low quality (no calibration, no adaptation)
+            "max_fit_residual": 0.08,      # template fit residual above this -> landmarks unreliable -> unmeasured
+            # online adaptation (baseline and thresholds adapt separately; both freeze on the same conditions)
+            "adapt_below_frac": 0.5,       # adapt only while every smoothed axis is below this share of its threshold
+            "abrupt_deg_s": 40.0,          # faster head movement freezes adaptation
+            "recovery_s": 3.0,             # adaptation stays frozen this long after any freeze condition
+            "max_gap_s": 1.0,              # a longer gap without a measurement (face lost, dropped frames) freezes
+            "adapt_max_step_deg": 0.05,    # per-update limit of the baseline change (each axis)
+            "thr_adapt_tau_s": 300.0,      # threshold adaptation time constant (None = thresholds stay at calibration)
+            "thr_max_shift_deg": {"yaw": 3.0, "pitch": 2.0, "roll": 2.0},  # max change vs the calibrated threshold
+        },
     },
     # §A.6 gaze
     "gaze": {
@@ -323,6 +354,90 @@ V2 = {
         "audio_silent_is_suspicious": True,
         "max_thumbnails": 1200,    # FPS10: 3x the samples (was 400 at 3 fps); ~640 px JPEGs in memory
     },
+    # BUF1 violation-level tolerance buffer (aggregation/buffer.py), applied after the detectors' own persistence.
+    # merge_gap_s  flagged runs closer than this form one event
+    # confirm_s    a merged event is confirmed (scored) only if it lasts >= this ...
+    # min_support  ... and has >= this many flagged samples (video) / 0.48 s windows (audio)
+    # grace_s      session buffer: the first grace_s s of confirmed time earn no points (0 for critical types)
+    # review_unconfirmed  unconfirmed events of this type still send the session to review
+    # correlated_with     time already confirmed for these types is not scored again for this one
+    # STARTING POLICIES TO EVALUATE, NOT VALIDATED THRESHOLDS: tune on labelled recordings against an explicit
+    # false-alert target, then check the frozen values on an independent test set.
+    "buffer": {
+        "enabled": True,
+        "min_monitored_s": 5.0,        # less analysed video -> assessment INCONCLUSIVE (retest recommended)
+        "min_video_usable_frac": 0.6,  # share of samples that were not too dark (lighting.low_mean)
+        "policies": {
+            GAZE_AWAY: {"merge_gap_s": 1.0, "confirm_s": 2.0, "min_support": 3, "grace_s": 5.0,
+                        "review_unconfirmed": False},
+            HEAD_POSE_DEVIATION: {"merge_gap_s": 1.0, "confirm_s": 1.5, "min_support": 2, "grace_s": 3.0,
+                                  "review_unconfirmed": False},
+            FACE_NOT_VISIBLE: {"merge_gap_s": 1.0, "confirm_s": 2.0, "min_support": 2, "grace_s": 3.0,
+                               "review_unconfirmed": False},
+            PROHIBITED_OBJECT: {"merge_gap_s": 1.0, "confirm_s": 1.0, "min_support": 2, "grace_s": 0.0,
+                                "review_unconfirmed": True},
+            MULTIPLE_PERSONS: {"merge_gap_s": 1.0, "confirm_s": 1.0, "min_support": 2, "grace_s": 0.0,
+                               "review_unconfirmed": True},
+            IDENTITY_MISMATCH: {"merge_gap_s": 1.0, "confirm_s": 2.0, "min_support": 3, "grace_s": 0.0,
+                                "review_unconfirmed": True},
+            FACE_SPOOF: {"merge_gap_s": 1.0, "confirm_s": 2.0, "min_support": 3, "grace_s": 0.0,
+                         "review_unconfirmed": True},
+            VOICE_MISMATCH: {"merge_gap_s": 1.0, "confirm_s": 2.0, "min_support": 3, "grace_s": 0.0,
+                             "review_unconfirmed": True},
+            MULTIPLE_SPEAKERS: {"merge_gap_s": 1.0, "confirm_s": 2.0, "min_support": 3, "grace_s": 0.0,
+                                "review_unconfirmed": True},
+            WHISPERING: {"merge_gap_s": 1.0, "confirm_s": 1.5, "min_support": 3, "grace_s": 0.0,
+                         "review_unconfirmed": False},
+            SUSPICIOUS_SOUND: {"merge_gap_s": 2.0, "confirm_s": 1.0, "min_support": 2, "grace_s": 2.0,
+                               "review_unconfirmed": False},
+            SPEECH_DETECTED: {"merge_gap_s": 0.8, "confirm_s": 0.5, "min_support": 1, "grace_s": 0.0,
+                              "review_unconfirmed": False},
+        },
+    },
+    # FUS1 evidence fusion (aggregation/fusion.py). Correlated time is de-duplicated inside an evidence family:
+    # "priority_dedup" = members in priority order; time already confirmed for an earlier member is not scored again
+    # for a later one (replaces the BUF1 correlated_with lists). Families without a rule are independent.
+    "fusion": {
+        "families": {
+            "identity": {"label": "Identity / presentation attack", "rule": "priority_dedup",
+                         "members": [IDENTITY_MISMATCH, FACE_SPOOF]},
+            "other_person_video": {"label": "Another person in view", "members": [MULTIPLE_PERSONS]},
+            "objects": {"label": "Prohibited objects", "members": [PROHIBITED_OBJECT]},
+            "face_presence": {"label": "Face presence", "members": [FACE_NOT_VISIBLE]},
+            "head_orientation": {"label": "Head and gaze orientation", "rule": "priority_dedup",
+                                 "members": [HEAD_POSE_DEVIATION, GAZE_AWAY]},
+            "voice": {"label": "Voices and speech", "rule": "priority_dedup",
+                      "members": [VOICE_MISMATCH, MULTIPLE_SPEAKERS, WHISPERING, SPEECH_DETECTED]},
+            "environment_sound": {"label": "Environment sounds", "members": [SUSPICIOUS_SOUND]},
+        },
+        # independent sensors describing the same situation: overlapping confirmed events raise review priority
+        # (never the score)
+        "corroboration_pairs": [[MULTIPLE_PERSONS, MULTIPLE_SPEAKERS], [MULTIPLE_PERSONS, VOICE_MISMATCH],
+                                [IDENTITY_MISMATCH, VOICE_MISMATCH], [PROHIBITED_OBJECT, SUSPICIOUS_SOUND]],
+        "relation_gap_s": 1.0,         # events this close count as overlapping for relations
+        # observation quality: event points x weight; "low" also blocks the critical floor and the critical overrides
+        "quality_weights": {"good": 1.0, "low": 0.8, "unknown": 1.0},
+        "low_quality_frac": 0.5,       # video event is "low" when >= this share of its samples is dark / unreliable
+        "min_speech_frac": 0.7,        # speaker events need this mean speech fraction (= speaker.live_min_speech_frac)
+        # checks without which no assessment is possible (unmeasurable -> INCONCLUSIVE)
+        "required_checks": [IDENTITY_MISMATCH, MULTIPLE_PERSONS, PROHIBITED_OBJECT],
+        # review priority: high when confirmed events of these severities come from >= N independent families
+        "priority_severities": ["critical", "medium"],
+        "high_priority_families": 2,
+        # audit records
+        "max_filtered_per_type": 100,  # filtered raw runs kept per type (the counts are always complete)
+        "gap_merge_s": 1.0,            # coverage gaps closer than this are one unavailable record
+        "min_gap_s": 1.0,              # shorter coverage gaps are not listed
+    },
+    # Detector-level validation metrics shown next to each violation (never the accuracy of one candidate's report).
+    # Only figures measured in this repository are listed; every other type reports "not measured".
+    "validation_metrics": {
+        VOICE_MISMATCH: {"dataset": "Mini LibriSpeech held-out + simulated live channel (tests/calibrate_speaker_live.py)",
+                         "version": "VOICE2", "false_reject_rate": 0.023, "false_accept_rate": 0.019,
+                         "note": "FAR from the clean-channel calibration (A5_speaker_calibration.json)"},
+        MULTIPLE_SPEAKERS: {"dataset": "Mini LibriSpeech held-out + simulated live channel (tests/calibrate_speaker_live.py)",
+                            "version": "VOICE2 foreign_run", "false_alarm_rate": 0.0, "detection_rate": 0.957},
+    },
     # §C.5 / §C.6 evidence package, counters and upload (EV1)
     "evidence": {
         # LIM2: a group is exceeded (session violated) when its share of the analysed session is GREATER than
@@ -353,6 +468,7 @@ LEGACY["calibration"].update(mode="count", count=3, min_samples=3, aggregate="me
                              require_identity=False, max_abs_yaw=1e9, max_abs_pitch=1e9)
 LEGACY["head_pose"].update(euler="legacy", smooth_window=1, smooth_s=None, persist_s=0.0, method="pnp", hyst_deg=0.0,
                            adapt_tau_s=None)
+LEGACY["head_pose"]["adaptive"] = dict(LEGACY["head_pose"]["adaptive"], enabled=False)
 LEGACY["gaze"].update(method="legacy", smooth_window=1, smooth_s=None, persist_s=0.0, hyst_deg=0.0, adapt_tau_s=None)
 LEGACY["face"].update(select="first", clamp_bbox=False, crop_margin=0.0, metric="euclidean",
                       smooth_window=1, vote_s=None, persist_s=0.0, mesh_max_faces=1, mesh_must_match=False,
@@ -365,6 +481,7 @@ LEGACY["objects"].update(method="legacy", weights="yolov8n.pt", persist_k=1, per
 LEGACY["face_not_visible"].update(enabled=False)
 LEGACY["antispoof"].update(enabled=False)
 LEGACY["aggregation"].update(include_calibration_in_numerator=True, verdict="legacy")
+LEGACY["buffer"].update(enabled=False)
 
 PROFILES = {"v2": V2, "legacy": LEGACY}
 

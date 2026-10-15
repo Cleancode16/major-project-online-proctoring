@@ -47,6 +47,11 @@ VIDEO_MONITORS = [
 ALERT_GROUP = {"object": "object", "person": "multiple_faces", "pose": "head_pose", "voice": "voice", "whisper": "voice",
                "spoof": "spoof"}
 
+# FUS1 live alert key -> violation type (the confirmation rule is the report's buffer rule for that type)
+LIVE_TYPE = {"identity": C.IDENTITY_MISMATCH, "pose": C.HEAD_POSE_DEVIATION, "gaze": C.GAZE_AWAY,
+             "person": C.MULTIPLE_PERSONS, "object": C.PROHIBITED_OBJECT, "face": C.FACE_NOT_VISIBLE,
+             "spoof": C.FACE_SPOOF, "voice": C.VOICE_MISMATCH, "sound": C.SUSPICIOUS_SOUND, "whisper": C.WHISPERING}
+
 ALERT_TEXT = {
     "identity": "Face does not match the enrolled candidate",
     "pose": "Head turned away from the screen",
@@ -132,6 +137,8 @@ class LiveSession:
         self.aticks = self.avoice = 0
         self.warnings = set()
         self.pending_alerts = deque(maxlen=50)
+        self.live_events = {}               # FUS1: alert key -> open live event {id, t0, confirmed}
+        self.live_seq = {}
         self.lock = threading.Lock()
         self.timing = {"video_process": 0.0, "audio_process": 0.0}
         self.connection_state = "new"
@@ -162,6 +169,46 @@ class LiveSession:
         ch = self.channel
         if ch is not None and ch.readyState == "open":
             ch.send(json.dumps(message, default=_jsonable))
+
+    # ------------------------------------------------------------------ live event lifecycle (FUS1)
+    def _live_event(self, key, on, t, details, lead_s):
+        """
+        One live event per run of a debounced flag, with a stable event_id across its updates:
+          provisional  the debounce fired (the signal lasted lead_s)
+          confirmed    the run reached the type's confirmation duration (buffer.policies[type].confirm_s)
+          ended        the signal stopped (final status confirmed / not confirmed)
+        Only confirmed events are counted. The final report re-validates everything offline.
+        """
+        vtype = LIVE_TYPE[key]
+        bc = self.cfg.get("buffer", {})
+        confirm_s = bc["policies"].get(vtype, {}).get("confirm_s", 0.0) if bc.get("enabled") else 0.0
+        ev, out = self.live_events.get(key), []
+
+        def msg(stage, status, reason):
+            return {"type": key, "event_id": ev["id"], "stage": stage, "status": status,
+                    "message": ALERT_TEXT[key], "details": details, "t": round(ev["t0"], 2),
+                    "t_update": round(t, 2), "duration_s": round(t - ev["t0"] + lead_s, 2), "reason": reason}
+
+        if on and ev is None:
+            n = self.live_seq[key] = self.live_seq.get(key, 0) + 1
+            ev = self.live_events[key] = {"id": f"live-{key}-{n:03d}", "t0": t, "confirmed": False}
+            out.append(msg("provisional", "provisional",
+                           f"detected for {lead_s:.1f} s; confirmed after {confirm_s:.1f} s"))
+        if on and not ev["confirmed"] and t - ev["t0"] + lead_s >= confirm_s:
+            ev["confirmed"] = True
+            with self.lock:
+                self.counts[key] = self.counts.get(key, 0) + 1
+            out.append(msg("confirmed", "confirmed",
+                           f"persisted {t - ev['t0'] + lead_s:.1f} s (rule: {confirm_s:.1f} s)"))
+        if not on and ev is not None:
+            d = t - ev["t0"] + lead_s
+            out.append(msg("ended", "confirmed" if ev["confirmed"] else "not_confirmed",
+                           f"ended after {d:.1f} s" + ("" if ev["confirmed"] else
+                                                      f", before the {confirm_s:.1f} s rule - not counted")))
+            del self.live_events[key]
+        if len(out) >= 2 and out[0]["stage"] == "provisional" and out[1]["stage"] == "confirmed":
+            out.pop(0)                      # confirmed on the first tick: one alert, not two
+        return out
 
     # ------------------------------------------------------------------ video
     async def _video_loop(self, track):
@@ -227,11 +274,8 @@ class LiveSession:
         for key, vtype, _ in VIDEO_MONITORS:
             on = self.vpers[vtype](bool(s["raw"].get(vtype, False)))
             live[vtype] = on
-            if on and not self.vprev.get(vtype):
-                with self.lock:
-                    self.counts[key] = self.counts.get(key, 0) + 1
-                alerts.append({"type": key, "message": ALERT_TEXT[key],
-                               "details": _sample_details(s)[vtype], "t": round(t, 2)})
+            if on or self.vprev.get(vtype):
+                alerts += self._live_event(key, on, t, _sample_details(s)[vtype], 1.0)   # 1 s debounce
             self.vprev[vtype] = on
         monitors = monitors_for_sample(s, live)
 
@@ -258,7 +302,8 @@ class LiveSession:
             "session_violated": any(e["exceeded"] for e in evidence.values()),
             "type": "status", "t": round(t, 2), "phase": s["phase"],
             "calibrated": base is not None,
-            "calibration": {"seconds": cal["duration_s"], "accepted": len(self.va.cal["yaw"])},
+            "calibration": {"seconds": cal["duration_s"], "accepted": len(self.va.cal["yaw"]),
+                            "pose_confidence": (self.va.pose_cal or {}).get("confidence")},   # HP3
             "monitors": monitors, "counts": counts, "alerts": alerts, "audio": audio,
             "warnings": warnings, "samples": self.va.processed,
             "sample_rate_hz": round(self.va.processed / max(t, 1e-6), 2) if t > 0 else None,
@@ -319,14 +364,14 @@ class LiveSession:
 
         flags = {"voice": voice_bad, "sound": sound_on, "whisper": whisper}
         new_alerts = []
+        t_audio = self.audio_samples / SR
         for key, raw in flags.items():
             on = self.apers[key](raw)
-            if on and not self.aprev.get(key):
+            if on or self.aprev.get(key):
                 details = {"voice": f"similarity {sim:.2f}" if sim is not None else "",
                            "sound": f"{sound} ({cats.get(sound, 0):.2f})" if sound else "",
                            "whisper": f"score {cats.get('whisper', 0):.2f}"}[key]
-                new_alerts.append({"type": key, "message": ALERT_TEXT[key], "details": details,
-                                   "t": round(self.audio_samples / SR, 2)})
+                new_alerts += self._live_event(key, on, t_audio, details, 0.0)
             self.aprev[key] = on
 
         def state(raw, confirmed):
@@ -352,9 +397,7 @@ class LiveSession:
             self.audio_status = status
             self.aticks += 1
             self.avoice += bool(self.aprev.get("voice") or self.aprev.get("whisper"))
-            self.pending_alerts.extend(new_alerts)
-            for a in new_alerts:
-                self.counts[a["type"]] = self.counts.get(a["type"], 0) + 1
+            self.pending_alerts.extend(new_alerts)       # counted in _live_event once confirmed
 
     # ------------------------------------------------------------------ stop
     async def stop(self):

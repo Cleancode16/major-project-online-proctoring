@@ -31,8 +31,14 @@ def v2_sampling():
               f"spacing mean={gaps.mean():.3f}s min={gaps.min():.3f} max={gaps.max():.3f} "
               f"coverage={ts[-1] / info['duration_s'] * 100:.0f}% of {info['duration_s']:.2f}s")
         if profile == "v2":
+            # expectations follow the configured rate (FPS10: 10 fps, was 3): samples land on the video's frame grid,
+            # so one spacing may be up to one native frame shorter or longer than 1 / fps
+            step, frame = 1.0 / cfg["sampling"]["fps"], 1.0 / info["fps"]
             expected = int(np.ceil(info["duration_s"] * cfg["sampling"]["fps"]))
-            ok = abs(len(ts) - expected) <= 1 and abs(gaps.mean() - 1 / 3) < 0.02 and gaps.max() < 0.4
+            ok = (abs(len(ts) - expected) <= 1 and abs(gaps.mean() - step) < 0.06 * step
+                  and gaps.min() >= step - frame - 1e-6 and gaps.max() <= step + frame + 1e-6)
+            print(f"V2 [v2] expected {expected} samples every {step:.3f}s "
+                  f"(+-{frame:.3f}s frame grid) -> {'ok' if ok else 'FAIL'}")
     return ok
 
 

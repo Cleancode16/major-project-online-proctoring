@@ -1,0 +1,39 @@
+{
+  "group": "object",
+  "items": [
+    {
+      "id": "object-001",
+      "type": "PROHIBITED_OBJECT",
+      "source": "video",
+      "start_s": 8.63,
+      "end_s": 12.62,
+      "duration_s": 3.99,
+      "event_ids": [
+        "prohibited_object-001"
+      ],
+      "score_contribution": 35.0,
+      "validation_reason": "confirmed: 3.99 s with 40 validated observation(s) (needs >= 1.0 s and >= 2)",
+      "related_event_ids": [
+        "gaze_away-001",
+        "head_pose_deviation-001",
+        "multiple_persons-001",
+        "speech_detected-001",
+        "suspicious_sound-001",
+        "voice_mismatch-001"
+      ],
+      "severity": "critical",
+      "observation_quality": "good",
+      "file": "evidence/object/01_prohibited_object_8.6s.jpg",
+      "snapshot_t": 11.919,
+      "objects": [
+        {
+          "label": "Cell Phone",
+          "confidence": 0.816
+        }
+      ],
+      "max_confidence": {
+        "Cell Phone": 0.816
+      }
+    }
+  ]
+}
