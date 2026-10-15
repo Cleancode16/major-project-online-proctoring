@@ -58,7 +58,7 @@ V2 = {
         "duration_s": 3.0,
         "count": 3,
         "min_samples": 5,       # need at least this many accepted samples
-        "max_duration_s": 10.0, # give up extending the window after this
+        "max_duration_s": 15.0, # give up extending the window after this (slow CPUs: room for min_valid_samples)
         "aggregate": "median",  # "median" or "mean"
         "require_identity": True,
         "max_abs_yaw": 25.0,    # frontal-enough gate (absolute, deg)
@@ -198,7 +198,13 @@ V2 = {
     # §A.9 objects
     "objects": {
         "method": "v2",            # "v2" (per-class conf) or "legacy" (one shared conf)
-        "weights": "yolov8s.pt",   # V8: s vs n measured, see flow.txt §A.9
+        "weights": "yolov8n.pt",   # V8: s vs n measured, see flow.txt §A.9 (n: live CPU budget, s: phone recall)
+        # PERF2: YOLO (persons + objects) runs on every yolo_every_n-th sample; head pose / gaze run on every sample.
+        # A skipped sample reuses the last YOLO result only while it is <= yolo_max_age_s old (otherwise YOLO runs
+        # on it). Reused results are neither new positive nor negative evidence: persistence and the buffer's
+        # support counts use the real YOLO observations only (pipeline.finalize, aggregation.denominators.observed).
+        "yolo_every_n": 2,
+        "yolo_max_age_s": 1.5,
         # display names; 62 = COCO "tv" (monitors) = extra screen (EV1). Earphones are not a COCO class:
         # add them here + in conf/model_names together with custom weights (flow.txt §C.5).
         "classes": {67: "Cell Phone", 73: "Book", 63: "Laptop", 62: "Extra Screen"},
@@ -474,7 +480,7 @@ LEGACY["face"].update(select="first", clamp_bbox=False, crop_margin=0.0, metric=
                       smooth_window=1, vote_s=None, persist_s=0.0, mesh_max_faces=1, mesh_must_match=False,
                       min_face_px=0)
 LEGACY["persons"].update(method="yolo", persist_s=0.0, persist_gap=0, persist_gap_s=None, static_reject=False)
-LEGACY["objects"].update(method="legacy", weights="yolov8n.pt", persist_k=1, persist_n=1, persist_window_s=None, roi_pass=False,
+LEGACY["objects"].update(method="legacy", weights="yolov8n.pt", yolo_every_n=1, persist_k=1, persist_n=1, persist_window_s=None, roi_pass=False,
                          weak_conf=None, ignore_inside_face=None,
                          classes={67: "Cell Phone", 73: "Book", 63: "Laptop"},
                          conf={67: 0.35, 73: 0.40, 63: 0.50})

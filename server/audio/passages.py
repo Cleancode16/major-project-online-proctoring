@@ -1,30 +1,19 @@
-"""Enrollment reading passages (original text, ~45-55 words, ~15-20 s read aloud; flow.txt §B.3).
+"""Enrollment reading text (flow.txt §B.3).
 
-Written to cover most English phonemes (plosives, fricatives, nasals, vowels, the "th", "zh",
-"ng" and "ch" sounds) so the voiceprint is not built from a narrow slice of the speaker's voice.
-One passage is picked at random per enrollment so a single prerecorded clip cannot be replayed.
+The candidate reads a single honesty declaration aloud (~60 words, ~20 s), which also serves as the
+voiceprint recording. It is long enough to give the required voiced speech (enroll.min_voiced_s)
+inside the 25 s recording window.
+
+SYNTHETIC_PASSAGES are the earlier phonetically varied passages. They are kept only because the
+synthetic test recordings (tests/data/audio/enroll_*_p<i>.wav) were generated from them.
 """
 
 import random
 
-PASSAGES = [
-    "On a quiet Thursday morning, Joseph checked the weather and packed a yellow umbrella. "
-    "The bus was late again, so he walked past the bakery, where fresh bread and sweet buns "
-    "were cooling by the window. He reached the station just as the big clock struck nine.",
-
-    "My younger sister enjoys measuring things. Last week she counted every step from the garden "
-    "gate to the old oak tree, then wrote the number on a blue card. She thinks careful habits "
-    "and patient questions usually lead to the most surprising answers.",
-
-    "The village fair opens at noon each June. Children judge the vegetable contest, a brass band "
-    "plays cheerful music, and visitors queue for hot chocolate. By evening the lights glow over "
-    "the square, and everyone shares stories about the largest pumpkin they have ever seen.",
-
-    "Please read this sentence clearly and at a normal pace. A thick fog covered the harbour, "
-    "but the fishing boats still moved slowly toward the shore. Their engines hummed, gulls "
-    "circled above the masts, and a warm light shone from the lighthouse on the rocky point.",
-]
-
+DECLARATIONS = (
+    "I acknowledge that I am responsible for maintaining a fair and transparent examination environment. I will not communicate with others, switch to unauthorized applications, use prohibited devices, or attempt to bypass the proctoring system. I understand that my camera and microphone may be monitored in accordance with the stated examination policy. Any suspected misconduct may be investigated and may result in appropriate disciplinary action."
+)
+PASSAGES = [DECLARATIONS]
 
 def pick(rng=None):
     """Return (index, passage)."""

@@ -601,6 +601,21 @@ CPU, median after warm-up):
   whole sample at ~172 ms, i.e. ~2x faster than real time at 3 fps. The
   test set is small (one clip); yolov8n stays selectable in config (and is
   what the legacy profile uses).
+PERF2 (2026-10-16, live sessions ran at 0.67 samples/s on this CPU, which
+  starved head-pose calibration): objects.weights = "yolov8n.pt" (default
+  now) and YOLO runs on every 2nd sample (objects.yolo_every_n = 2); head
+  pose and gaze still run on every sample. Measured on e2e_clip (CPU, same
+  conditions, alternating runs): YOLO step 161-227 ms -> ~50 ms per sample.
+  Cost: lower recall (phone 10/12 vs 12/12 above; ultralytics bus.jpg
+  3/4 people vs 4/4). yolov8s.pt can be set back; the stride still applies.
+  A skipped sample reuses the last YOLO result only while it is <=
+  objects.yolo_max_age_s (1.5 s) old, otherwise YOLO runs on it. Reused
+  results (sample["scene_held"]) never clear a detection and are not
+  evidence: offline persistence (pipeline._scene_persistence) runs the
+  unchanged rules on the real YOLO observations with windows at the
+  observation rate, a reused sample takes the final flag of its source; the
+  live debounce is not fed on reused samples; buffer support / raw counts
+  skip them (aggregation.denominators.observed).
 Per-sample output keeps {class name: max confidence} and, for evidence
 (§C.5), the boxes {label, conf, xyxy} of every prohibited object found.
 Extra screen (EV1): COCO class 62 "tv" (monitors are labelled tv in COCO)

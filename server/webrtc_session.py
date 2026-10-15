@@ -27,7 +27,7 @@ from aggregation.evidence import counter as evidence_counter
 from aggregation.report import _jsonable, build_report, save_report
 from audio import io as aio
 from audio.monitor import AudioAnalyzer
-from video.pipeline import VideoAnalyzer
+from video.pipeline import SCENE_TYPES, VideoAnalyzer
 from video.temporal import LivePersistence, samples_for
 
 SR = 16000
@@ -269,10 +269,14 @@ class LiveSession:
         live = {}
         alerts = []
         k = samples_for(1.0, self.va.rate)          # FPS10: 1 s debounce at the measured live rate
-        for p in self.vpers.values():
-            p.resize(k)
+        k_scene = samples_for(1.0, self.va.scene_rate())   # PERF2: same 1 s over the real YOLO observations
+        for vtype, p in self.vpers.items():
+            p.resize(k_scene if vtype in SCENE_TYPES else k)
         for key, vtype, _ in VIDEO_MONITORS:
-            on = self.vpers[vtype](bool(s["raw"].get(vtype, False)))
+            if vtype in SCENE_TYPES and s.get("scene_held"):
+                on = self.vprev.get(vtype, False)   # PERF2: reused YOLO result - keep the state, feed no evidence
+            else:
+                on = self.vpers[vtype](bool(s["raw"].get(vtype, False)))
             live[vtype] = on
             if on or self.vprev.get(vtype):
                 alerts += self._live_event(key, on, t, _sample_details(s)[vtype], 1.0)   # 1 s debounce

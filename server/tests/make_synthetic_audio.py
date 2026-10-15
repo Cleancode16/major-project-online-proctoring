@@ -19,7 +19,7 @@ import sys
 import numpy as np
 
 from audio import io as aio
-from audio.passages import PASSAGES
+from audio.passages import SYNTHETIC_PASSAGES as PASSAGES  # recordings were made from these
 from tests import paths
 
 SR = 16000

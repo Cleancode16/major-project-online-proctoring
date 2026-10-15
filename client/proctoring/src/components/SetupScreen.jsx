@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import Webcam from 'react-webcam';
 import axios from 'axios';
 import {
-  Camera, CheckCircle, AlertCircle, Upload, Mic, Square, RefreshCw, ShieldCheck, AlertTriangle, Loader, Check,
+  Camera, CheckCircle, AlertCircle, Upload, Mic, Square, ShieldCheck, AlertTriangle, Loader, Check,
   History, Image as ImageIcon, Sun, User as UserIcon, RotateCcw, ArrowRight, Camera as CameraIcon,
 } from 'lucide-react';
 import { SkeletonText } from './ui/Skeleton';
@@ -13,7 +13,7 @@ import EmptyState from './ui/EmptyState';
 
 const CONSENT_TEXT =
   'For proctoring, this system stores a reference photo of your face and a voiceprint computed from you ' +
-  'reading a short passage aloud. During the test your webcam and microphone are analysed on the proctoring ' +
+  'reading a short honesty declaration aloud. During the test your webcam and microphone are analysed on the proctoring ' +
   'server. When a violation limit is exceeded, the evidence for that violation (snapshots, short audio clips ' +
   'and their details) is sent to the evidence server configured by your institution, together with the session ' +
   'ID. The raw enrollment recording is not kept, only the voiceprint.';
@@ -57,7 +57,7 @@ const VoiceRecorder = ({ candidate, onResult, disabled }) => {
       const { data } = await axios.get('/api/enrollment/passage', { params: exclude != null ? { exclude } : {} });
       setPassage(data);
     } catch (err) {
-      setError(apiError(err, 'Could not load the passage'));
+      setError(apiError(err, 'Could not load the declaration'));
     }
   };
 
@@ -233,12 +233,12 @@ const VoiceRecorder = ({ candidate, onResult, disabled }) => {
     <div className="space-y-4">
       <div>
         <h3 className="card-title">Voice enrollment</h3>
-        <p className="text-[13px] text-muted mt-1">Press Record and read this passage aloud at a normal pace.</p>
+        <p className="text-[13px] text-muted mt-1">Press Record and read this declaration aloud at a normal pace.</p>
       </div>
       <blockquote className="rounded-md border border-line border-l-2 border-l-accent px-4 py-3 text-sm leading-relaxed surface-muted">
         {passage ? passage.text : (
           <>
-            <span className="sr-only">Loading the passage…</span>
+            <span className="sr-only">Loading the declaration…</span>
             <SkeletonText lines={4} />
           </>
         )}
@@ -254,9 +254,6 @@ const VoiceRecorder = ({ candidate, onResult, disabled }) => {
             <Square className="w-4 h-4" /> Stop early ({remaining.toFixed(0)} s left)
           </button>
         )}
-        <button onClick={() => loadPassage(passage?.index)} disabled={recording || requesting || busy} className="btn btn-secondary">
-          <RefreshCw className="w-4 h-4" /> Another passage
-        </button>
       </div>
 
       {recording && (
@@ -522,7 +519,7 @@ const SetupScreen = ({ onEnrolled }) => {
               className="h-full"
               icon={Mic}
               title="Voice enrollment"
-              description="Confirm your reference photo first. Then you will read a short passage aloud to create your voiceprint."
+              description="Confirm your reference photo first. Then you will read a short honesty declaration aloud to create your voiceprint."
               action={<span className="badge badge-muted"><CameraIcon className="w-3.5 h-3.5" /> Waiting for step 2</span>}
             />
           )}

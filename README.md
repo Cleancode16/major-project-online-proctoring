@@ -89,7 +89,7 @@ All features in Section 2 marked *Implemented* exist in the code and are wired e
 |---|---|---|---|
 | Candidate onboarding with consent | Candidate ID + explicit consent before any biometric data is stored | Implemented | `client/.../SetupScreen.jsx`, `server/server.py:enrollment_face` |
 | Reference-face enrollment | Store a reference photo + FaceNet embedding (rejects 0 / >1 faces, tiny faces) | Implemented | `server/server.py:enrollment_face`, `server/video/face.py:reference_from_image`, `server/enrollment_store.py` |
-| Voice enrollment (voiceprint) | 25 s read-aloud passage → speech length / level / SNR / clipping / consistency checks → Resemblyzer voiceprint; max 3 attempts | Implemented | `server/server.py:enrollment_voice`, `server/audio/enrollment.py:evaluate_recording`, `server/audio/speaker.py:voiceprint` |
+| Voice enrollment (voiceprint) | 25 s read-aloud honesty declaration → speech length / level / SNR / clipping / consistency checks → Resemblyzer voiceprint; max 3 attempts | Implemented | `server/server.py:enrollment_voice`, `server/audio/enrollment.py:evaluate_recording`, `server/audio/speaker.py:voiceprint` |
 | Passage word-match check (ASR) | Compare a Vosk transcript with the passage | **Implemented but disabled** (`enroll.asr_enabled = False`) | `server/audio/asr.py` |
 | Webcam / microphone initialisation | `getUserMedia` with permission-error handling, secure-context check, recorder fallback | Implemented | `SetupScreen.jsx:VoiceRecorder`, `ProctoringSession.jsx:startLive` |
 | Live streaming to the server | Browser → server WebRTC (video + audio); status back on a data channel | Implemented | `ProctoringSession.jsx`, `server/webrtc_session.py:LiveSession` |
@@ -99,8 +99,8 @@ All features in Section 2 marked *Implemented* exist in the code and are wired e
 | Face anti-spoofing | MiniFASNet real-face score; `FACE_SPOOF` violation | Implemented (attack recall not measured) | `server/video/antispoof.py`, `server/video/minifasnet.py`, `pipeline.py:_flag_spoof` |
 | Facial landmarks + head pose | MediaPipe Face Mesh; person-specific landmark template (Kabsch) with PnP for calibration; candidate-specific adaptive thresholds (HP3) | Implemented | `server/video/head_pose.py`, `pipeline.py:_calibrate_thresholds, _flag_pose, _adapt_pose` |
 | Eye gaze | L2CS-Net (ResNet50, Gaze360) yaw/pitch vs calibrated forward gaze; iris-landmark fallback | Implemented | `server/video/l2cs.py`, `server/video/gaze.py`, `pipeline.py:_flag_gaze_l2cs` |
-| Multiple-person detection | YOLOv8s persons fused with MediaPipe faces; photo/poster rejection; arm/hand rejection | Implemented | `server/video/detectors.py:count_persons`, `pipeline.py:_mark_static_faces` |
-| Prohibited-object detection | YOLOv8s COCO classes: cell phone, book, laptop, tv ("extra screen"), plus a second pass around the face | Implemented | `server/video/detectors.py:objects_v2, run_yolo_roi` |
+| Multiple-person detection | YOLOv8n persons fused with MediaPipe faces; photo/poster rejection; arm/hand rejection | Implemented | `server/video/detectors.py:count_persons`, `pipeline.py:_mark_static_faces` |
+| Prohibited-object detection | YOLOv8n COCO classes: cell phone, book, laptop, tv ("extra screen"), plus a second pass around the face | Implemented | `server/video/detectors.py:objects_v2, run_yolo_roi` |
 | Low-light warning | Warn when the image is too dark (live and report) | Implemented | `pipeline.py:process` (brightness), `webrtc_session.py`, `aggregation/report.py` |
 | Voice activity detection | Silero VAD (webrtcvad fallback) with high-pass filter, SNR and YAMNet confirmation | Implemented | `server/audio/vad.py`, `server/audio/monitor.py:validate_segments` |
 | Speaker verification / multiple speakers | Resemblyzer d-vectors vs enrollment + session-adapted print | Implemented | `server/audio/monitor.py`, `server/audio/speaker.py` |
@@ -179,7 +179,7 @@ Online-Proctoring-System/
     │   ├── enrollment.py         Voice enrollment recording evaluation
     │   ├── quality.py            Level / SNR / clipping measurements and judgement
     │   ├── asr.py                Optional Vosk passage check (disabled by default)
-    │   ├── passages.py           Reading passages for enrollment
+    │   ├── passages.py           Honesty declaration read aloud at enrollment
     │   └── io.py                 Audio decoding (bundled ffmpeg), source status, recording helpers
     ├── aggregation/
     │   ├── aggregate.py          Per-type statistics, scoring, verdict, group percentages; runs buffer + fusion
@@ -192,7 +192,7 @@ Online-Proctoring-System/
     │   ├── pdf_report.py         PDF export (reportlab)
     │   └── docx_report.py        Word export (python-docx)
     ├── models/                   Downloaded weights (git-ignored): l2cs/, antispoof/, tfhub/, vosk model
-    ├── yolov8n.pt, yolov8s.pt, yolov8m.pt   YOLO weights (yolov8s is used; n = legacy profile; m was only compared)
+    ├── yolov8n.pt, yolov8s.pt, yolov8m.pt   YOLO weights (yolov8n is used; s = more accurate, slower; m was only compared)
     ├── data/                     Runtime data (git-ignored): enrollment/, reports/, uploads/, evidence_uploads/
     ├── legacy/                   v1 code kept for reference: app_v1.py, server_v1.py (Socket.IO), flow_v1.txt
     └── tests/                    Test scripts, calibration / evaluation scripts, results/
@@ -218,7 +218,7 @@ flowchart LR
         VEX["Video executor thread<br/>VideoAnalyzer"]
         AEX["Audio executor thread<br/>AudioAnalyzer"]
         JOB["Job threads<br/>recorded-video analysis"]
-        MODELS["In-process models<br/>MediaPipe, FaceNet, MiniFASNet,<br/>L2CS-Net, YOLOv8s, Silero, YAMNet, Resemblyzer"]
+        MODELS["In-process models<br/>MediaPipe, FaceNet, MiniFASNet,<br/>L2CS-Net, YOLOv8n, Silero, YAMNet, Resemblyzer"]
         AGG["Aggregation<br/>stats, buffer, evidence fusion,<br/>score, verdict, assessment, evidence"]
     end
 
@@ -348,7 +348,7 @@ flowchart TD
 | 10 | Anti-spoofing | Subject face → real-face score, 1 s mean | `pipeline.py:_flag_spoof` | Model missing → not checked, report warning |
 | 11 | Landmarks, pose, gaze | Face Mesh → pose (deg), L2CS gaze (deg) | `head_pose.py`, `l2cs.py`, `pipeline.py` | Mesh not matching the subject → no pose/gaze for the sample |
 | 12 | Calibration | First 3 s (≥5 accepted, max 10 s) → baseline pose, head template, forward gaze, adaptive head-pose thresholds | `pipeline.py:_calibration_add, _calibrate_thresholds` | Fallback baseline after 10 s; fixed head-pose thresholds with "reduced" confidence when calibration quality is insufficient; gaze baseline collected later if gaze samples were implausible |
-| 13 | Scene | Frame → persons, objects (YOLOv8s + ROI pass) | `pipeline.py:_flag_scene`, `detectors.py` | — |
+| 13 | Scene | Frame → persons, objects (YOLOv8n + ROI pass, every 2nd sample) | `pipeline.py:_flag_scene`, `detectors.py` | — |
 | 14 | Audio processing | Audio → VAD probabilities, YAMNet scores, live speaker similarity | `audio/monitor.py`, `webrtc_session.py:_process_audio` | Silent source → warning `mic_silent` |
 | 15 | Live debounce + alerts | Raw flags → 1 s debounce → live events with stable IDs (provisional → confirmed → ended); counters count confirmed events | `webrtc_session.py:_process_video, _process_audio, _live_event` | Repeated updates of one event replace its entry in the client |
 | 16 | Termination | Stop request → peer connection closed, executors drained | `LiveSession.stop` | 404 for unknown session; 500 if the report fails |
@@ -369,7 +369,7 @@ Summary of the active (profile `v2`) pipeline:
 | 6.4 | Landmarks | Pretrained DL model | MediaPipe Face Mesh (`refine_landmarks=True`, 478 points) |
 | 6.5 | Head pose | Classical geometry | `cv2.solvePnP` 6-point model + person-specific 3D template aligned with Kabsch/SVD |
 | 6.6 | Eye gaze | Pretrained DL regressor | L2CS-Net, ResNet50, Gaze360 weights (fallback: iris-landmark geometry) |
-| 6.7 | Persons + objects | Pretrained DL detector + rules | Ultralytics YOLOv8s (COCO) + face fusion rules |
+| 6.7 | Persons + objects | Pretrained DL detector + rules | Ultralytics YOLOv8n (COCO) + face fusion rules |
 | 6.8 | Voice activity | Pretrained DL model + rules | Silero VAD (fallback: webrtcvad) |
 | 6.9 | Sound events | Pretrained DL classifier | YAMNet (TF Hub `google/yamnet/1`) |
 | 6.10 | Speaker verification | Pretrained DL embedding + rules | Resemblyzer `VoiceEncoder` (d-vectors) |
@@ -479,9 +479,9 @@ No model in this repository is trained or fine-tuned by the project. All learned
 - **Fallback (`gaze.fallback = "v2"`)**: an iris-ratio method on MediaPipe iris landmarks — `gaze.py:eye_ratios`, `gaze_decision`. It is used automatically if L2CS cannot be loaded; the report then carries a warning.
 - **Measured CPU cost** (plan.md GZ3, dev machine): 448 px ≈ 205–240 ms per face; 224 px ≈ 65–80 ms.
 
-### 6.7 Persons and prohibited objects — YOLOv8s + fusion rules
+### 6.7 Persons and prohibited objects — YOLOv8n + fusion rules
 
-- **Model**: Ultralytics YOLOv8s, COCO-pretrained (`objects.weights = "yolov8s.pt"`; downloaded by Ultralytics on first use) — `server/video/detectors.py`. Class ids are verified at start-up — `verify_class_ids`.
+- **Model**: Ultralytics YOLOv8n, COCO-pretrained (`objects.weights = "yolov8n.pt"`; downloaded by Ultralytics on first use). YOLOv8n was chosen over YOLOv8s for the live CPU budget; YOLOv8s finds more (phone recall 12/12 vs 10/12 on the sample clip, 4/4 vs 3/4 people in `bus.jpg`) and can be set back in config — `server/video/detectors.py`. Class ids are verified at start-up — `verify_class_ids`.
 - **Classes**:
 
   | Class (COCO id) | Shown as | Confidence threshold |
@@ -492,6 +492,7 @@ No model in this repository is trained or fine-tuned by the project. All learned
   | laptop (63) | Laptop | 0.50 |
   | tv (62) | Extra Screen | 0.50 |
 
+- **Frequency** (`yolo_every_n = 2`, `yolo_max_age_s = 1.5`): YOLO runs on every 2nd sample; head pose and gaze run on every sample. A skipped sample reuses the last YOLO result only while it is at most 1.5 s old (otherwise YOLO runs on it). Reused results neither clear a detection nor add evidence: persistence, live debounce and the buffer's support counts use the real YOLO observations only (`pipeline._scene_persistence`, `denominators.observed`).
 - **Passes**:
   1. Full frame at `imgsz = 640`, YOLO base confidence `min(0.25, weak_conf = 0.20)`.
   2. A second pass on the hands / desk region around the face (`roi_for_face`; skipped if the crop exceeds 60% of the frame). Boxes are merged per class at IoU ≥ 0.5.
@@ -993,7 +994,7 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
     participant VA as VideoAnalyzer.process
-    participant Y as detectors (YOLOv8s)
+    participant Y as detectors (YOLOv8n)
     participant LS as LiveSession
     participant FE as AlertPanel
     participant FN as finalize + aggregation
@@ -1050,7 +1051,7 @@ Base URL: `http://localhost:5000` (the frontend calls relative `/api/...`, which
 | Method | Path | Purpose | Request | Response | Errors | Source |
 |---|---|---|---|---|---|---|
 | GET | `/api/health` | Liveness | — | `{status, sessions, timestamp}` | — | `server.py:health` |
-| GET | `/api/enrollment/passage` | Random reading passage | `?exclude=<int>` | `{index, text, record_s, max_attempts}` | — | `enrollment_passage` |
+| GET | `/api/enrollment/passage` | Enrollment reading text (the honesty declaration, index 0) | `?exclude=<int>` | `{index, text, record_s, max_attempts}` | — | `enrollment_passage` |
 | GET | `/api/enrollment/<candidate>` | Stored enrollment status | — | `{candidate, face, voice, meta}` | — | `enrollment_status` |
 | POST | `/api/enrollment/face` | Enroll reference face | JSON `{candidate, consent, image: dataURL}` | `{success, message, bbox, image_size}` | 400: missing ID, no consent, invalid image, no face, >1 face, face too small | `enrollment_face` |
 | POST | `/api/enrollment/voice` | Evaluate recording, store voiceprint | multipart `candidate, passage, audio` | `{ok, problems[], warnings[], metrics{}, asr, attempt, max_attempts}` | 400: no face enrollment / missing data / no audio; 429: attempts used | `enrollment_voice` |
@@ -1199,7 +1200,7 @@ There is **no database**. State is kept in memory (sessions, jobs) and in files 
 
 | Weights | How obtained | Location |
 |---|---|---|
-| YOLOv8s | Auto-downloaded by Ultralytics | `server/yolov8s.pt` |
+| YOLOv8n | Auto-downloaded by Ultralytics | `server/yolov8n.pt` |
 | YAMNet | Auto-downloaded by TF Hub | `server/models/tfhub/` |
 | FaceNet | Auto-downloaded by keras-facenet | `~/.keras-facenet/` |
 | L2CS-Net | `python -m video.l2cs --download` (run by `start-backend.ps1` if missing) | `server/models/l2cs/` |
@@ -1289,7 +1290,7 @@ npm run dev
 1. **Enrollment**
    - Enter the candidate ID and accept the consent notice.
    - Take or upload a reference photo.
-   - Read the passage shown on screen aloud for 25 s while a live level meter is shown.
+   - Read the honesty declaration shown on screen aloud (25 s window) while a live level meter is shown.
    - The backend checks speech length, level, noise, clipping and voice consistency, and explains how to fix a bad recording. You get up to 3 attempts.
    - A returning candidate can reuse their saved enrollment.
 2. **Test.** Choose one:

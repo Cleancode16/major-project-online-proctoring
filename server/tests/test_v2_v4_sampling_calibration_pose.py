@@ -78,7 +78,7 @@ def v3_calibration():
 
     # fallback: every frame fails the frontal gate (side camera)
     va, _ = _analyzer("v2")
-    for i in range(40):
+    for i in range(60):   # past calibration.max_duration_s (15 s) at 3 fps
         va._calibration_add(i / 3.0, (40.0, 5.0, 0.0), None, True)
         if va.baseline is not None:
             break

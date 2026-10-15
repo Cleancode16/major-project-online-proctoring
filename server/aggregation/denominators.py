@@ -9,6 +9,13 @@ import config as C
 
 FACE_DEPENDENT = {C.IDENTITY_MISMATCH, C.HEAD_POSE_DEVIATION, C.GAZE_AWAY, C.FACE_SPOOF}
 NEEDS_BASELINE = {C.HEAD_POSE_DEVIATION, C.GAZE_AWAY}
+SCENE_TYPES = {C.MULTIPLE_PERSONS, C.PROHIBITED_OBJECT}
+
+
+def observed(sample, vtype):
+    """PERF2: False if this sample reused an earlier YOLO result for `vtype` (it covers the time, but is not an
+    observation: it never adds raw detections or supporting observations)."""
+    return not (vtype in SCENE_TYPES and sample.get("scene_held"))
 
 
 def counts_toward(sample, vtype, include_calibration=False):

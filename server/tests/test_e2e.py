@@ -22,7 +22,7 @@ import config as C
 import enrollment_store
 from audio import enrollment
 from audio import io as aio
-from audio.passages import PASSAGES
+from audio.passages import SYNTHETIC_PASSAGES as PASSAGES  # recordings were made from these
 from tests import paths
 from tests.make_synthetic_audio import ring
 

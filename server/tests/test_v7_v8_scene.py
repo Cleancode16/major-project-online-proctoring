@@ -43,7 +43,9 @@ def real_images():
     cfg = C.get_config("v2")
     det = models.face_detector(cfg["face"]["det_confidence"])
     ok = True
-    for name, expected in (("zidane.jpg", 2), ("bus.jpg", 4)):
+    # bus.jpg has 4 people: yolov8s finds 4, yolov8n (PERF2 default, measured) finds 3 - the known recall cost
+    bus = 3 if cfg["objects"]["weights"] == "yolov8n.pt" else 4
+    for name, expected in (("zidane.jpg", 2), ("bus.jpg", bus)):
         img = cv2.imread(os.path.join(assets, name))
         faces = face.detect_faces(cv2.cvtColor(img, cv2.COLOR_BGR2RGB), det, min_face_px=cfg["face"]["min_face_px"])
         boxes = detectors.run_yolo(img, cfg["objects"])

@@ -20,7 +20,7 @@ used for scoring, and is never a probability of cheating.
 """
 
 import config as C
-from aggregation.denominators import FACE_DEPENDENT, counts_toward
+from aggregation.denominators import FACE_DEPENDENT, counts_toward, observed
 from aggregation.events import events_from_flags, video_slots
 
 SCHEMA_VERSION = "fus1"
@@ -114,6 +114,7 @@ def normalize(timeline, stats, video, audio, cfg):
         counters[vtype] = counters.get(vtype, 0) + 1
         if e["source"] == "video":
             idx = list(range(e["first_index"], e["first_index"] + e["n"]))
+            idx = [i for i in idx if observed(samples[i], vtype)]   # PERF2: reused YOLO results are not observations
             raw_n = sum(1 for i in idx if samples[i].get("raw", {}).get(vtype, samples[i]["flags"].get(vtype)))
             valid_n = sum(1 for i in idx if samples[i]["flags"].get(vtype))
             quality, slot = _video_quality(samples, [i for i in idx if samples[i]["flags"].get(vtype)], vtype, cfg), 1.0 / rate

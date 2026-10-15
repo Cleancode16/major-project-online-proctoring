@@ -27,6 +27,7 @@ TESTS = [
     ("HP2/GZ2 head pose + gaze accuracy", "tests.test_hp2_pose_gaze"),
     ("GZ3 L2CS-Net gaze", "tests.test_gz3_l2cs"),
     ("PERF1 torch thread count", "tests.test_perf1_threads"),
+    ("PERF2 YOLO stride", "tests.test_perf2_yolo_stride"),
     ("DET2 persons / objects / gaze calibration", "tests.test_det2_persons_objects"),
     ("FAS1 face anti-spoofing", "tests.test_fas1_antispoof"),
     ("VAD2/MP2/OB2 voice, persons, objects accuracy", "tests.test_vad2_mp2_ob2"),

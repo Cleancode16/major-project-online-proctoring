@@ -16,6 +16,8 @@ import config as C
 from video import detectors, face, gaze, head_pose, models
 from video.temporal import MajorityVote, RollingMedian, centered_mean, centered_median, filter_runs, samples_for
 
+SCENE_TYPES = (C.MULTIPLE_PERSONS, C.PROHIBITED_OBJECT)   # YOLO-based flags (PERF2 stride)
+
 
 def iter_sampled_frames(path, sampling):
     """Yield (frame_bgr, t_seconds, frame_index) according to the sampling policy (§A.3)."""
@@ -180,6 +182,8 @@ class VideoAnalyzer:
         self.adapt_counts = {"updated": 0, "recovery": 0}
         self.pose_quality_counts = {}
         self.face_tracks = []                 # MP2 static-face tracking
+        # PERF2: YOLO stride; last real YOLO result {t, index, fields, raw} reused on skipped samples
+        self.scene_last, self.scene_skips, self.scene_runs = None, 0, 0
         # GZ3: L2CS-Net gaze (falls back to gaze.fallback if torch / the weights are unavailable)
         self.gaze_method, self.gaze_fallback, self.l2cs, self.ema_gaze = gz["method"], None, None, None
         self.late_gaze = []                   # DET2: forward gaze collected after calibration if needed
@@ -250,11 +254,14 @@ class VideoAnalyzer:
 
         n = len(self.cal["yaw"])
         fallback = False
+        # HP3: keep calibrating (up to max_duration_s) until there are enough samples for adaptive thresholds;
+        # at a low live rate duration_s alone yields too few and the calibration is always "insufficient"
+        n_min = max(cc["min_samples"], ac["min_valid_samples"]) if ac.get("enabled") else cc["min_samples"]
         if cc["mode"] == "count":
             done = n >= cc["count"]
         else:
             elapsed = t - self.cal_t0
-            done = (elapsed >= cc["duration_s"] and n >= cc["min_samples"]) or \
+            done = (elapsed >= cc["duration_s"] and n >= n_min) or \
                    (elapsed >= cc["max_duration_s"] and n >= 1)
             if not done and elapsed >= cc["max_duration_s"] and self.cal_any:
                 done = fallback = True
@@ -433,7 +440,8 @@ class VideoAnalyzer:
 
         # evidence: keep an annotated JPEG only for samples with a raw violation (bounded memory, flow.txt §C.5)
         max_thumbs = cfg.get("aggregation", {}).get("max_thumbnails", 0)
-        if any(s["raw"].values()) and self.n_thumbs < max_thumbs:
+        observed = {k: v for k, v in s["raw"].items() if not (s.get("scene_held") and k in SCENE_TYPES)}
+        if any(observed.values()) and self.n_thumbs < max_thumbs:
             s["_thumb"] = annotated_snapshot(frame, s, cfg)
             self.n_thumbs += 1
 
@@ -608,7 +616,8 @@ class VideoAnalyzer:
         # both the current measurement and the (lagging) causal median must be clearly normal
         if np.any(np.maximum(np.abs(smoothed), np.abs(rel_c)) >= ac["adapt_below_frac"] * thr):
             reasons.append("near_threshold")
-        if dt is None or dt > ac["max_gap_s"]:
+        # a gap is a missed measurement, not the normal sample spacing (live rate can be < 1 Hz on a slow CPU)
+        if dt is None or dt > max(ac["max_gap_s"], 2.5 / self.rate):
             reasons.append("measurement_gap")
         elif dt > 0 and np.max(np.abs(rel_c - last[1])) / dt > ac["abrupt_deg_s"]:
             reasons.append("abrupt_motion")
@@ -807,7 +816,32 @@ class VideoAnalyzer:
             tracks.append(tr)
         self.face_tracks = tracks       # faces not seen in this sample drop their track
 
+    def scene_rate(self):
+        """PERF2: rate (Hz) of real YOLO observations (= sample rate when YOLO runs on every sample)."""
+        return self.rate * self.scene_runs / self.processed if self.processed and self.scene_runs else self.rate
+
     def _flag_scene(self, s, frame, faces):
+        oc = self.cfg["objects"]
+        every, max_age, last = max(1, int(oc.get("yolo_every_n") or 1)), oc.get("yolo_max_age_s"), self.scene_last
+        if (last is not None and self.scene_skips < every - 1
+                and max_age is not None and s["t"] - last["t"] <= max_age):
+            # PERF2: skipped sample - carry the last (fresh) YOLO result; marked so it is not counted as an
+            # observation. Object boxes belong to the source frame, so they are not drawn on this one.
+            self.scene_skips += 1
+            s.update(last["fields"], scene_held=True, scene_src=last["index"], scene_age_s=round(s["t"] - last["t"], 3))
+            s["objects"] = dict(last["fields"]["objects"])
+            s["raw"].update(last["raw"])
+        else:
+            self._run_scene(s, frame, faces)
+            self.scene_skips, self.scene_runs = 0, self.scene_runs + 1
+            self.scene_last = {"t": s["t"], "index": len(self.samples),
+                               "fields": {k: s[k] for k in ("persons", "persons_yolo", "objects", "object_weak") if k in s},
+                               "raw": {k: s["raw"][k] for k in SCENE_TYPES}}
+        s["face_boxes"] = [list(f["bbox"]) for f in faces]
+        if self.cfg["face_not_visible"]["enabled"]:
+            s["raw"][C.FACE_NOT_VISIBLE] = not s["face_visible"]
+
+    def _run_scene(self, s, frame, faces):
         oc, pc = self.cfg["objects"], self.cfg["persons"]
         boxes = detectors.run_yolo(frame, oc)
         if oc.get("roi_pass") and oc["method"] != "legacy" and s.get("bbox") is not None:
@@ -820,11 +854,8 @@ class VideoAnalyzer:
             objects, s["object_boxes"], s["object_weak"] = detectors.objects_v2(boxes, oc, s.get("bbox"))
         s["persons"], s["persons_yolo"] = persons, yolo_n
         s["objects"] = objects
-        s["face_boxes"] = [list(f["bbox"]) for f in faces]
         s["raw"][C.MULTIPLE_PERSONS] = persons > 1
         s["raw"][C.PROHIBITED_OBJECT] = bool(objects)
-        if self.cfg["face_not_visible"]["enabled"]:
-            s["raw"][C.FACE_NOT_VISIBLE] = not s["face_visible"]
 
     # ------------------------------------------------------------------ finalize
     def finalize(self):
@@ -844,10 +875,10 @@ class VideoAnalyzer:
             C.FACE_SPOOF: (samples_for(cfg.get("antispoof", {}).get("persist_s", 2.0), self.rate), 0),
         }
         for vtype, (min_len, max_gap) in persist.items():
-            raw = [s["raw"].get(vtype, False) for s in self.samples]
-            if vtype == C.PROHIBITED_OBJECT and cfg["objects"].get("weak_conf"):
-                raw = promote_weak(raw, [s.get("object_weak", False) for s in self.samples], self.w["weak_reach"])  # OB2
-            final = filter_runs(raw, min_len, max_gap)
+            if vtype in SCENE_TYPES:
+                final = self._scene_persistence(vtype)
+            else:
+                final = filter_runs([s["raw"].get(vtype, False) for s in self.samples], min_len, max_gap)
             for s, f in zip(self.samples, final):
                 s.setdefault("flags", {})[vtype] = bool(f)
         return {
@@ -862,6 +893,29 @@ class VideoAnalyzer:
             "antispoof_error": self.fas_error,
             "head_pose": self.pose_summary(),
         }
+
+    def _scene_persistence(self, vtype):
+        """
+        PERF2: the unchanged persistence rules (persons: min run + gap bridge; objects: k-of-n + OB2 weak promotion)
+        applied to the real YOLO observations only, with the windows derived from seconds at the observation rate.
+        A sample that reused a YOLO result takes the final flag of the observation it reused.
+        """
+        cfg = self.cfg
+        obs = [i for i, s in enumerate(self.samples) if not s.get("scene_held")]
+        if not obs:
+            return [False] * len(self.samples)
+        rate = self.rate * len(obs) / len(self.samples)
+        w = windows(cfg, rate)
+        raw = [self.samples[i]["raw"].get(vtype, False) for i in obs]
+        if vtype == C.MULTIPLE_PERSONS:
+            min_len, max_gap = samples_for(cfg["persons"]["persist_s"], rate), w["person_gap"]
+        else:
+            min_len, max_gap = w["obj_k"], w["obj_n"] - w["obj_k"]
+            if cfg["objects"].get("weak_conf"):
+                raw = promote_weak(raw, [self.samples[i].get("object_weak", False) for i in obs], w["weak_reach"])  # OB2
+        by_index = dict(zip(obs, filter_runs(raw, min_len, max_gap)))
+        return [by_index.get(s["scene_src"], False) if s.get("scene_held") else by_index[i]
+                for i, s in enumerate(self.samples)]
 
     def pose_summary(self):
         """HP3 audit block: calibration quality, initial / final thresholds, deviations, observation quality."""

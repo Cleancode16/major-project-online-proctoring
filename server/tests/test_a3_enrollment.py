@@ -13,7 +13,7 @@ import numpy as np
 import config as C
 from audio import enrollment
 from audio import io as aio
-from audio.passages import PASSAGES
+from audio.passages import SYNTHETIC_PASSAGES as PASSAGES  # recordings were made from these
 from tests import paths
 
 AUD = paths.DATA / "audio"

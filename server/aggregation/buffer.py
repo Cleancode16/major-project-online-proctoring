@@ -43,13 +43,14 @@ def merge_events(events, gap_s):
 
 
 def _video_support(samples, vtype):
-    """Per sample: (member of the population, raw detection, final flag)."""
-    from aggregation.denominators import counts_toward
+    """Per sample: (member of the population, raw detection, final flag, flag backed by a real observation)."""
+    from aggregation.denominators import counts_toward, observed
     out = []
     for s in samples:
         member = counts_toward(s, vtype) and vtype in s.get("flags", {})
         flag = member and bool(s["flags"][vtype])
-        out.append((member, member and bool(s.get("raw", {}).get(vtype, flag)), flag))
+        obs = observed(s, vtype)            # PERF2: a reused YOLO result is no raw detection / support
+        out.append((member, member and obs and bool(s.get("raw", {}).get(vtype, flag)), flag, flag and obs))
     return out
 
 
@@ -71,7 +72,7 @@ def buffer_video(video, vtype, events, pol):
     merged = merge_events(events, pol["merge_gap_s"])
 
     def support_of(m):
-        return sum(1 for i in range(m["first_index"], m["first_index"] + m["n"]) if sup[i][2])
+        return sum(1 for i in range(m["first_index"], m["first_index"] + m["n"]) if sup[i][3])
 
     _confirm(merged, support_of, pol)
     mask = [False] * len(samples)
@@ -79,9 +80,9 @@ def buffer_video(video, vtype, events, pol):
         if m["status"] == "confirmed":
             for i in range(m["first_index"], m["first_index"] + m["n"]):
                 mask[i] = sup[i][2]
-    den = sum(1 for m_, _, _ in sup if m_)
-    counts = {"raw_detection_count": sum(1 for _, r, _ in sup if r),
-              "filtered_detection_count": sum(1 for _, r, f in sup if r and not f),
+    den = sum(1 for m_, _, _, _ in sup if m_)
+    counts = {"raw_detection_count": sum(1 for _, r, _, _ in sup if r),
+              "filtered_detection_count": sum(1 for _, r, f, _ in sup if r and not f),
               "valid_observation_duration_s": round(den / rate, 2),
               "unavailable_duration_s": round((len(samples) - den) / rate, 2),
               "slot_s": 1.0 / rate, "den": den}
